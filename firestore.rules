@@ -25,18 +25,23 @@ service cloud.firestore {
         && get(profilePath(request.auth.uid)).data.role in roles;
     }
 
+    function isBootstrapAdmin() {
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && request.auth.token.email is string
+        && request.auth.token.email.lower() == 'mohamoudsow45@gmail.com';
+    }
+
     function isAdmin() {
-      return hasRole(['ADMIN']);
+      return hasRole(['ADMIN']) || isBootstrapAdmin();
     }
 
     match /users/{uid} {
       allow get: if isSignedIn() && (request.auth.uid == uid || isAdmin());
       allow list: if isAdmin();
       allow create: if isAdmin() || (
-        isSignedIn()
+        isBootstrapAdmin()
         && request.auth.uid == uid
-        && request.auth.token.email_verified == true
-        && request.auth.token.email in ['espoirmpena5@gmail.com', 'mpenaespoir95@gmail.com']
         && request.resource.data.role == 'ADMIN'
         && request.resource.data.active == true
       );
@@ -54,7 +59,7 @@ service cloud.firestore {
         && request.resource.data.name.size() <= 120
         && request.resource.data.email == request.auth.token.email
         && request.resource.data.requestedRole in [
-          'ADMIN', 'CASHIER', 'BUYER', 'SALES', 'AUDITOR'
+          'CASHIER', 'BUYER', 'SALES', 'AUDITOR'
         ]
         && request.resource.data.createdAt == request.time
         && (

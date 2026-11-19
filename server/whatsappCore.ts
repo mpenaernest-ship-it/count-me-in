@@ -15,10 +15,13 @@ import {
   appendAuditLog,
   buildAutomationPreview,
   buildAutomationStatePayload,
+  formatFrNumber,
   getBrazzavilleClock,
   getScheduledCategoriesForWeekday,
+  GOLD_REQUIRED_CARATS,
   inferRecipientCategories,
   normalizeDigits,
+  normalizeGoldKaratPrices,
   type PersistedAutomationData,
 } from './whatsappAutomation.ts';
 
@@ -1877,10 +1880,32 @@ export const createWhatsAppService = (
       const cat = body.quote.category;
       const prev = data.goldPrices[cat];
       const nowIso = new Date().toISOString();
+
+      let normalizedUnit = body.quote.unit || prev.unit;
+      let normalizedKarats: Record<string, number> | undefined = prev.karatPricesXaf;
+      let refPrice = Number(body.quote.pricePerGramXaf ?? prev.pricePerGramXaf ?? 0);
+
+      if (cat === 'OR_FONDU') {
+        normalizedUnit = 'carat';
+        refPrice = Number.isFinite(refPrice) && refPrice > 0 ? Math.round(refPrice * 100) / 100 : 0;
+      } else {
+        normalizedUnit = 'gramme';
+        normalizedKarats = normalizeGoldKaratPrices(
+          cat,
+          body.quote.karatPricesXaf ?? prev.karatPricesXaf
+        );
+        const firstPositive =
+          GOLD_REQUIRED_CARATS[cat].map((k) => normalizedKarats?.[k] || 0).find((v) => v > 0) || 0;
+        refPrice = firstPositive;
+      }
+
       const next: GoldPriceQuoteEntry = {
         ...prev,
         ...body.quote,
         category: cat,
+        unit: normalizedUnit,
+        pricePerGramXaf: refPrice,
+        ...(normalizedKarats ? { karatPricesXaf: normalizedKarats } : {}),
         updatedAt: nowIso,
         updatedBy: body.actorName || body.quote.updatedBy || 'Opérateur',
         ...(body.quote.status === 'validated'
@@ -1891,6 +1916,14 @@ export const createWhatsAppService = (
           : {}),
       };
       data.goldPrices[cat] = next;
+
+      const auditPriceSummary =
+        cat === 'OR_FONDU'
+          ? `${formatFrNumber(next.pricePerGramXaf)} ${next.currency}/carat`
+          : GOLD_REQUIRED_CARATS[cat]
+              .map((k) => `${k.toLowerCase()}: ${formatFrNumber(normalizedKarats?.[k] || 0)}`)
+              .join(' · ') + ` ${next.currency}/g`;
+
       data = appendAuditLog(data, {
         actorName: body.actorName || 'Opérateur',
         actorRole: body.actorRole || 'ADMIN',
@@ -1899,7 +1932,7 @@ export const createWhatsAppService = (
             ? `Validation tarif ${cat}`
             : `Modification tarif ${cat} (${next.status})`,
         entityType: 'gold_price',
-        summary: `${cat} : ${next.pricePerGramXaf} ${next.currency}/${next.unit} · Statut: ${next.status}.`,
+        summary: `${cat} : ${auditPriceSummary} · Statut: ${next.status}.`,
       });
       const saved = await storage.saveAutomationData(data);
       return { status: 200, json: buildAutomationStatePayload(saved) };

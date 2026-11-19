@@ -264,7 +264,7 @@ export const RegisterScreen: React.FC<{ onShowLogin: () => void }> = ({ onShowLo
               onChange={(e) => setRole(e.target.value as AppRole)}
               className="w-full px-4 py-2.5 bg-[#F8F9FB] rounded-xl border border-[#E5E8EC] text-sm text-[#202124] focus:outline-hidden focus:border-[#00BFB5]"
             >
-              {APP_ROLES.map((appRole) => (
+              {APP_ROLES.filter((appRole) => appRole.id !== 'ADMIN').map((appRole) => (
                 <option key={appRole.id} value={appRole.id}>{appRole.label}</option>
               ))}
             </select>

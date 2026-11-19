@@ -29,6 +29,42 @@ export const ALL_CATEGORIES: WhatsAppBusinessCategory[] = [
   'CLIENT_DEVISES',
 ];
 
+export const GOLD_REQUIRED_CARATS: Record<'OR_BRUT' | 'BIJOUX', readonly string[]> = {
+  OR_BRUT: ['23K', '22K', '21K', '20K'],
+  BIJOUX: ['22K', '21K', '18K', '14K', '9K'],
+};
+
+const LEGACY_TEMPLATE_BODIES: Record<'OR_BRUT' | 'OR_FONDU' | 'BIJOUX', string> = {
+  OR_BRUT: `CAMS GOLD
+OFFRE D’ACHAT – OR BRUT
+
+Bonjour {nom},
+Voici nos prix d’achat pour cette semaine :
+Prix du gramme : {prix} FCFA
+
+Nous restons disponibles pour vos transactions.
+Cordialement,
+CAMS GOLD.`,
+  OR_FONDU: `CAMS GOLD
+COURS DU JOUR – OR FONDU
+
+Bonjour {nom},
+Notre prix d’achat du jour est fixé à :
+{prix} FCFA / gramme.
+
+Merci pour votre confiance.
+CAMS GOLD.`,
+  BIJOUX: `CAMS GOLD
+OFFRE D’ACHAT – BIJOUX
+
+Bonjour {nom},
+Voici notre prix d’achat hebdomadaire :
+{prix} FCFA / gramme.
+
+Nous restons à votre disposition.
+CAMS GOLD.`,
+};
+
 const DEFAULT_TEMPLATES_SEED: WhatsAppMessageTemplate[] = [
   {
     id: 'tpl-or-brut',
@@ -40,8 +76,11 @@ const DEFAULT_TEMPLATES_SEED: WhatsAppMessageTemplate[] = [
 OFFRE D’ACHAT – OR BRUT
 
 Bonjour {nom},
-Voici nos prix d’achat pour cette semaine :
-Prix du gramme : {prix} FCFA
+Voici nos prix d’achat par gramme pour cette semaine :
+23k : {prix_23k} FCFA / g
+22k : {prix_22k} FCFA / g
+21k : {prix_21k} FCFA / g
+20k : {prix_20k} FCFA / g
 
 Nous restons disponibles pour vos transactions.
 Cordialement,
@@ -60,7 +99,7 @@ COURS DU JOUR – OR FONDU
 
 Bonjour {nom},
 Notre prix d’achat du jour est fixé à :
-{prix} FCFA / gramme.
+{prix} FCFA / carat.
 
 Merci pour votre confiance.
 CAMS GOLD.`,
@@ -77,8 +116,12 @@ CAMS GOLD.`,
 OFFRE D’ACHAT – BIJOUX
 
 Bonjour {nom},
-Voici notre prix d’achat hebdomadaire :
-{prix} FCFA / gramme.
+Voici nos prix d’achat hebdomadaires par gramme :
+22k : {prix_22k} FCFA / g
+21k : {prix_21k} FCFA / g
+18k : {prix_18k} FCFA / g
+14k : {prix_14k} FCFA / g
+9k : {prix_9k} FCFA / g
 
 Nous restons à votre disposition.
 CAMS GOLD.`,
@@ -146,6 +189,19 @@ export const DEFAULT_CATEGORY_SCHEDULES: CategoryScheduleRule[] = [
   { category: 'CLIENT_DEVISES', frequency: 'daily', weekday: 1, enabled: true },
 ];
 
+export const normalizeGoldKaratPrices = (
+  category: 'OR_BRUT' | 'BIJOUX',
+  raw?: Record<string, number> | null
+): Record<string, number> => {
+  const out: Record<string, number> = {};
+  for (const k of GOLD_REQUIRED_CARATS[category]) {
+    const rawVal = raw?.[k] ?? raw?.[k.toLowerCase()];
+    const num = Number(rawVal);
+    out[k] = Number.isFinite(num) && num > 0 ? Math.round(num * 100) / 100 : 0;
+  }
+  return out;
+};
+
 const createDefaultGoldPrices = (): Record<'OR_BRUT' | 'OR_FONDU' | 'BIJOUX', GoldPriceQuoteEntry> => {
   const now = new Date();
   const todayStr = now.toISOString().slice(0, 10);
@@ -157,6 +213,7 @@ const createDefaultGoldPrices = (): Record<'OR_BRUT' | 'OR_FONDU' | 'BIJOUX', Go
       pricePerGramXaf: 0,
       unit: 'gramme',
       currency: 'FCFA',
+      karatPricesXaf: normalizeGoldKaratPrices('OR_BRUT'),
       source: 'manual',
       status: 'draft',
       validFrom: todayStr,
@@ -167,7 +224,7 @@ const createDefaultGoldPrices = (): Record<'OR_BRUT' | 'OR_FONDU' | 'BIJOUX', Go
     OR_FONDU: {
       category: 'OR_FONDU',
       pricePerGramXaf: 0,
-      unit: 'gramme',
+      unit: 'carat',
       currency: 'FCFA',
       source: 'software_base',
       status: 'draft',
@@ -181,6 +238,7 @@ const createDefaultGoldPrices = (): Record<'OR_BRUT' | 'OR_FONDU' | 'BIJOUX', Go
       pricePerGramXaf: 0,
       unit: 'gramme',
       currency: 'FCFA',
+      karatPricesXaf: normalizeGoldKaratPrices('BIJOUX'),
       source: 'manual',
       status: 'draft',
       validFrom: todayStr,
@@ -310,10 +368,18 @@ export const getBrazzavilleClock = (timeZone = 'Africa/Brazzaville') => {
   };
 };
 
-export const formatFrNumber = (val: number): string =>
-  new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 2 })
-    .format(Number.isFinite(val) ? val : 0)
+export const formatFrNumber = (val: number, decimals?: number): string => {
+  const safeVal = Number.isFinite(val) ? val : 0;
+  const hasDecimals = Math.abs(safeVal - Math.round(safeVal)) >= 0.005;
+  const minFrac = decimals !== undefined ? decimals : hasDecimals ? 2 : 0;
+  const maxFrac = decimals !== undefined ? decimals : 2;
+  return new Intl.NumberFormat('fr-FR', {
+    minimumFractionDigits: minFrac,
+    maximumFractionDigits: maxFrac,
+  })
+    .format(safeVal)
     .replace(/\u202F/g, ' ');
+};
 
 export const normalizeAutomationData = (
   parsed?: Partial<PersistedAutomationData> | null
@@ -324,7 +390,18 @@ export const normalizeAutomationData = (
   }
   const mergedTemplates = DEFAULT_TEMPLATES_SEED.map((defTpl) => {
     const savedTpl = (parsed.templates || []).find((t) => t.category === defTpl.category);
-    return savedTpl ? { ...defTpl, ...savedTpl } : defTpl;
+    if (!savedTpl) return defTpl;
+    const legacyBody =
+      defTpl.category === 'OR_BRUT' || defTpl.category === 'OR_FONDU' || defTpl.category === 'BIJOUX'
+        ? LEGACY_TEMPLATE_BODIES[defTpl.category]
+        : null;
+    const shouldUpgradeBody =
+      legacyBody && (savedTpl.body || '').trim() === legacyBody.trim();
+    return {
+      ...defTpl,
+      ...savedTpl,
+      body: shouldUpgradeBody ? defTpl.body : savedTpl.body || defTpl.body,
+    };
   });
   const mergedSchedules = DEFAULT_CATEGORY_SCHEDULES.map((defRule) => {
     const savedRule = (parsed.categorySchedules || []).find(
@@ -332,15 +409,47 @@ export const normalizeAutomationData = (
     );
     return savedRule ? { ...defRule, ...savedRule } : defRule;
   });
+
+  const savedBrut = parsed.goldPrices?.OR_BRUT;
+  const savedFondu = parsed.goldPrices?.OR_FONDU;
+  const savedBijoux = parsed.goldPrices?.BIJOUX;
+
+  const brutKarats = normalizeGoldKaratPrices('OR_BRUT', savedBrut?.karatPricesXaf);
+  const bijouxKarats = normalizeGoldKaratPrices('BIJOUX', savedBijoux?.karatPricesXaf);
+
+  // Migration automatique d'un ancien tarif Or fondu saisi en FCFA / gramme vers FCFA / carat
+  let fonduPerCarat = Number(savedFondu?.pricePerGramXaf || 0);
+  let fonduRef24k = savedFondu?.reference24kPerGramXaf;
+  if (savedFondu?.unit === 'gramme' && fonduPerCarat > 15000) {
+    fonduRef24k = fonduPerCarat;
+    fonduPerCarat = Math.round((fonduPerCarat / 24) * 100) / 100;
+  }
+
   return {
     ...base,
     ...parsed,
     settings: { ...DEFAULT_AUTOMATION_SETTINGS, ...(parsed.settings || {}) },
     categorySchedules: mergedSchedules,
     goldPrices: {
-      OR_BRUT: { ...base.goldPrices.OR_BRUT, ...(parsed.goldPrices?.OR_BRUT || {}) },
-      OR_FONDU: { ...base.goldPrices.OR_FONDU, ...(parsed.goldPrices?.OR_FONDU || {}) },
-      BIJOUX: { ...base.goldPrices.BIJOUX, ...(parsed.goldPrices?.BIJOUX || {}) },
+      OR_BRUT: {
+        ...base.goldPrices.OR_BRUT,
+        ...(savedBrut || {}),
+        unit: 'gramme',
+        karatPricesXaf: brutKarats,
+      },
+      OR_FONDU: {
+        ...base.goldPrices.OR_FONDU,
+        ...(savedFondu || {}),
+        pricePerGramXaf: fonduPerCarat,
+        ...(fonduRef24k ? { reference24kPerGramXaf: fonduRef24k } : {}),
+        unit: 'carat',
+      },
+      BIJOUX: {
+        ...base.goldPrices.BIJOUX,
+        ...(savedBijoux || {}),
+        unit: 'gramme',
+        karatPricesXaf: bijouxKarats,
+      },
     },
     currencyRates:
       Array.isArray(parsed.currencyRates) && parsed.currencyRates.length > 0
@@ -508,8 +617,8 @@ export const buildAutomationPreview = (
     for (const r of matchingRecipients) {
       const contactBlockReasons = getRecipientBlockReasons(r);
 
-      if (category === 'OR_BRUT' || category === 'OR_FONDU' || category === 'BIJOUX') {
-        const quote = data.goldPrices[category];
+      if (category === 'OR_FONDU') {
+        const quote = data.goldPrices.OR_FONDU;
         const effStatus = getEffectiveGoldStatus(quote);
         const priceReasons: string[] = [];
         if (!quote || quote.pricePerGramXaf <= 0) {
@@ -524,6 +633,8 @@ export const buildAutomationPreview = (
         const rendered = renderTemplate(tplBody, {
           nom: r.name,
           prix: priceText,
+          unite: 'carat',
+          devise: quote?.currency || 'FCFA',
         });
         const idempotencyKey = `${campaignType}_${clock.dateKey}_${r.reference}_${category}`;
         const alreadySentToday = hasSuccessfulLogForKey(idempotencyKey);
@@ -539,7 +650,69 @@ export const buildAutomationPreview = (
           contactName: r.name,
           phone: r.phone,
           category,
-          priceSummary: `${priceText} FCFA / ${quote?.unit || 'g'}`,
+          priceSummary: `${priceText} ${quote?.currency || 'FCFA'} / carat`,
+          renderedText: rendered,
+          eligible: allReasons.length === 0,
+          blockReasons: allReasons,
+          idempotencyKey,
+          alreadySentToday,
+        });
+      } else if (category === 'OR_BRUT' || category === 'BIJOUX') {
+        const quote = data.goldPrices[category];
+        const effStatus = getEffectiveGoldStatus(quote);
+        const requiredCarats = GOLD_REQUIRED_CARATS[category];
+        const karatMap = normalizeGoldKaratPrices(category, quote?.karatPricesXaf);
+        const missingCarats = requiredCarats.filter((k) => !(karatMap[k] > 0));
+
+        const priceReasons: string[] = [];
+        if (missingCarats.length === requiredCarats.length) {
+          priceReasons.push('Tarif absent');
+        } else if (missingCarats.length > 0) {
+          priceReasons.push(`Tarif manquant (${missingCarats.join(', ')})`);
+        } else if (effStatus === 'expired') {
+          priceReasons.push('Tarif expiré');
+        } else if (effStatus !== 'validated') {
+          priceReasons.push('Tarif en brouillon (non validé)');
+        }
+
+        const currency = quote?.currency || 'FCFA';
+        const lines = requiredCarats.map(
+          (k) => `${k.toLowerCase()} : ${formatFrNumber(karatMap[k] || 0)} ${currency} / g`
+        );
+        const tarifsBlock = lines.join('\n');
+        const rendered = renderTemplate(tplBody, {
+          nom: r.name,
+          tarifs: tarifsBlock,
+          prix: tarifsBlock,
+          devise: currency,
+          prix_23k: formatFrNumber(karatMap['23K'] || 0),
+          prix_22k: formatFrNumber(karatMap['22K'] || 0),
+          prix_21k: formatFrNumber(karatMap['21K'] || 0),
+          prix_20k: formatFrNumber(karatMap['20K'] || 0),
+          prix_18k: formatFrNumber(karatMap['18K'] || 0),
+          prix_14k: formatFrNumber(karatMap['14K'] || 0),
+          prix_9k: formatFrNumber(karatMap['9K'] || 0),
+        });
+        const idempotencyKey = `${campaignType}_${clock.dateKey}_${r.reference}_${category}`;
+        const alreadySentToday = hasSuccessfulLogForKey(idempotencyKey);
+        const allReasons = [
+          ...contactBlockReasons,
+          ...priceReasons,
+          ...(alreadySentToday ? ['Déjà envoyé aujourd’hui (anti-doublon)'] : []),
+        ];
+
+        const summaryText =
+          missingCarats.length === requiredCarats.length
+            ? `0 ${currency} / g`
+            : `${requiredCarats.map((k) => `${k.toLowerCase()}: ${formatFrNumber(karatMap[k] || 0)}`).join(' · ')} ${currency}/g`;
+
+        items.push({
+          id: `${r.reference}-${category}`,
+          contactRef: r.reference,
+          contactName: r.name,
+          phone: r.phone,
+          category,
+          priceSummary: summaryText,
           renderedText: rendered,
           eligible: allReasons.length === 0,
           blockReasons: allReasons,

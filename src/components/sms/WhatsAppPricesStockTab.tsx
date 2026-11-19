@@ -14,14 +14,17 @@ import {
 import { AppPanel, SectionHeading } from '../common/UIComponents';
 import { PurchaseFormulaConfig } from '../../types';
 import {
+  BIJOUX_CARATS,
   CurrencyRateInventoryEntry,
+  GOLD_CARAT_LIST_BY_CATEGORY,
   GoldPriceQuoteEntry,
+  OR_BRUT_CARATS,
   PriceApprovalStatus,
   WhatsAppAutomationState,
 } from '../../types/whatsappAutomation';
 import { GoldPriceService } from '../../services/goldPriceService';
 import { ExchangeRateService } from '../../services/exchangeRateService';
-import { computeGoldPurchasePrice, formatMoney } from '../../utils/goldMath';
+import { computeGoldPurchasePrice, formatMoney, formatPriceCard } from '../../utils/goldMath';
 
 interface WhatsAppPricesStockTabProps {
   automationState: WhatsAppAutomationState;
@@ -45,19 +48,19 @@ const GOLD_CATEGORIES: Array<{
   {
     key: 'OR_BRUT',
     title: 'Or brut',
-    subtitle: 'Prix saisi manuellement et validé (24K ou référence configurée)',
+    subtitle: 'Prix par gramme pour 23K, 22K, 21K et 20K (validés)',
     frequencyLabel: 'Diffusion hebdomadaire',
   },
   {
     key: 'OR_FONDU',
     title: 'Or fondu',
-    subtitle: 'Prix de base du logiciel synchronisé et validé',
+    subtitle: 'Prix au carat ((Prix 24K) / 24) synchronisé et validé',
     frequencyLabel: 'Diffusion quotidienne',
   },
   {
     key: 'BIJOUX',
     title: 'Bijoux',
-    subtitle: 'Prix saisi manuellement et validé',
+    subtitle: 'Prix par gramme pour 22K, 21K, 18K, 14K et 9K (validés)',
     frequencyLabel: 'Diffusion hebdomadaire',
   },
 ];
@@ -99,6 +102,9 @@ export const WhatsAppPricesStockTab: React.FC<WhatsAppPricesStockTabProps> = ({
   );
   const [newCurrencyCode, setNewCurrencyCode] = useState('');
   const [syncingSoftware, setSyncingSoftware] = useState(false);
+  const [syncingCategory, setSyncingCategory] = useState<'OR_BRUT' | 'OR_FONDU' | 'BIJOUX' | null>(
+    null
+  );
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(
     null
@@ -122,25 +128,67 @@ export const WhatsAppPricesStockTab: React.FC<WhatsAppPricesStockTabProps> = ({
     }));
   };
 
+  const updateGoldKaratPrice = (
+    cat: 'OR_BRUT' | 'BIJOUX',
+    karatKey: string,
+    value: number
+  ) => {
+    setGoldDrafts((prev) => {
+      const current = prev[cat];
+      const nextKarats = {
+        ...(current.karatPricesXaf || {}),
+        [karatKey]: Math.max(0, Number.isFinite(value) ? value : 0),
+      };
+      const firstPositive =
+        GOLD_CARAT_LIST_BY_CATEGORY[cat].map((k) => nextKarats[k] || 0).find((v) => v > 0) || 0;
+      return {
+        ...prev,
+        [cat]: {
+          ...current,
+          karatPricesXaf: nextKarats,
+          pricePerGramXaf: firstPositive,
+          unit: 'gramme',
+          status: 'draft',
+        },
+      };
+    });
+  };
+
   const handleSaveGold = async (
     cat: 'OR_BRUT' | 'OR_FONDU' | 'BIJOUX',
     targetStatus: PriceApprovalStatus
   ) => {
     if (targetStatus === 'validated' && !canValidate) return;
     const item = goldDrafts[cat];
-    if (targetStatus === 'validated' && (!item.pricePerGramXaf || item.pricePerGramXaf <= 0)) {
-      setFeedback({
-        type: 'error',
-        text: `Impossible de valider ${cat} : le prix doit être supérieur à 0 FCFA.`,
-      });
-      return;
+
+    if (cat === 'OR_FONDU') {
+      if (targetStatus === 'validated' && (!item.pricePerGramXaf || item.pricePerGramXaf <= 0)) {
+        setFeedback({
+          type: 'error',
+          text: 'Impossible de valider Or fondu : le prix par carat doit être supérieur à 0 FCFA.',
+        });
+        return;
+      }
+    } else {
+      const requiredCarats = GOLD_CARAT_LIST_BY_CATEGORY[cat];
+      const karatMap = item.karatPricesXaf || {};
+      const missingCarats = requiredCarats.filter((k) => !(Number(karatMap[k]) > 0));
+      if (targetStatus === 'validated' && missingCarats.length > 0) {
+        setFeedback({
+          type: 'error',
+          text: `Impossible de valider ${cat === 'OR_BRUT' ? 'Or brut' : 'Bijoux'} : renseignez un prix/gramme supérieur à 0 FCFA pour : ${missingCarats.join(', ')}.`,
+        });
+        return;
+      }
     }
+
     setSavingKey(cat);
     setFeedback(null);
     try {
       await onSaveGoldPrice({
         ...item,
         category: cat,
+        unit: cat === 'OR_FONDU' ? 'carat' : 'gramme',
         status: targetStatus,
       });
       setFeedback({
@@ -160,27 +208,32 @@ export const WhatsAppPricesStockTab: React.FC<WhatsAppPricesStockTabProps> = ({
     }
   };
 
+  const resolveSpotAndRate = async () => {
+    const [goldQuote, fxSnap] = await Promise.all([
+      GoldPriceService.fetchGoldUsd(),
+      ExchangeRateService.fetchRates(),
+    ]);
+    const usdToXaf =
+      purchaseFormulaConfig.officialUsdRate > 0
+        ? purchaseFormulaConfig.officialUsdRate
+        : ExchangeRateService.getRate(fxSnap, 'USD', 'XAF') || 600;
+    const ouncePrice =
+      goldQuote.pricePerTroyOunceUsd > 0
+        ? goldQuote.pricePerTroyOunceUsd
+        : purchaseFormulaConfig.kitcoGoldSpotUsd || 0;
+
+    if (ouncePrice <= 0) {
+      throw new Error('Cours spot de l’or indisponible. Saisissez les tarifs manuellement.');
+    }
+    return { ouncePrice, usdToXaf };
+  };
+
   const handleSyncFonduFromSoftware = async () => {
     setSyncingSoftware(true);
+    setSyncingCategory('OR_FONDU');
     setFeedback(null);
     try {
-      const [goldQuote, fxSnap] = await Promise.all([
-        GoldPriceService.fetchGoldUsd(),
-        ExchangeRateService.fetchRates(),
-      ]);
-      const usdToXaf =
-        purchaseFormulaConfig.officialUsdRate > 0
-          ? purchaseFormulaConfig.officialUsdRate
-          : ExchangeRateService.getRate(fxSnap, 'USD', 'XAF') || 600;
-      const ouncePrice =
-        goldQuote.pricePerTroyOunceUsd > 0
-          ? goldQuote.pricePerTroyOunceUsd
-          : purchaseFormulaConfig.kitcoGoldSpotUsd || 0;
-
-      if (ouncePrice <= 0) {
-        throw new Error('Cours spot de l’or indisponible. Saisissez le tarif manuellement.');
-      }
-
+      const { ouncePrice, usdToXaf } = await resolveSpotAndRate();
       const res = computeGoldPurchasePrice({
         pricePerTroyOunceUsd: ouncePrice,
         usdToXafRate: usdToXaf,
@@ -188,15 +241,19 @@ export const WhatsAppPricesStockTab: React.FC<WhatsAppPricesStockTabProps> = ({
         category: 'Or fondu',
         config: purchaseFormulaConfig,
       });
-      const computedPrice = Math.round(
+      const fondu24kRaw =
         purchaseFormulaConfig.useParallelRateInPurchases && res.parallelPricePerGram > 0
           ? res.parallelPricePerGram
-          : res.pricePerGram
-      );
+          : res.pricePerGram;
+      const fondu24kRounded = Math.round(fondu24kRaw);
+      const perCarat = Math.round((fondu24kRaw / 24) * 100) / 100;
+
       const today = new Date().toISOString().slice(0, 10);
       await onSaveGoldPrice({
         category: 'OR_FONDU',
-        pricePerGramXaf: computedPrice,
+        pricePerGramXaf: perCarat,
+        reference24kPerGramXaf: fondu24kRounded,
+        unit: 'carat',
         source: 'software_base',
         status: 'draft',
         validFrom: today,
@@ -204,7 +261,7 @@ export const WhatsAppPricesStockTab: React.FC<WhatsAppPricesStockTabProps> = ({
       });
       setFeedback({
         type: 'success',
-        text: `Cours de base Or fondu calculé (${formatMoney(computedPrice)} FCFA/g · OZ $${ouncePrice}). En attente de validation pour diffusion.`,
+        text: `Cours Or fondu calculé : ${formatPriceCard(perCarat, 2)} FCFA / carat ((${formatMoney(fondu24kRounded)} FCFA/g 24K) / 24 · OZ $${ouncePrice}). En attente de validation.`,
       });
     } catch (err) {
       setFeedback({
@@ -213,6 +270,63 @@ export const WhatsAppPricesStockTab: React.FC<WhatsAppPricesStockTabProps> = ({
       });
     } finally {
       setSyncingSoftware(false);
+      setSyncingCategory(null);
+    }
+  };
+
+  const handlePrefillKaratCategoryFromSoftware = async (cat: 'OR_BRUT' | 'BIJOUX') => {
+    setSyncingSoftware(true);
+    setSyncingCategory(cat);
+    setFeedback(null);
+    try {
+      const { ouncePrice, usdToXaf } = await resolveSpotAndRate();
+      const carats = cat === 'OR_BRUT' ? OR_BRUT_CARATS : BIJOUX_CARATS;
+      const goldCategoryLabel = cat === 'OR_BRUT' ? 'Or brut' : 'Bijoux';
+      const karatPricesXaf: Record<string, number> = {};
+
+      for (const kLabel of carats) {
+        const numericK = Number(kLabel.replace(/[^0-9.]/g, ''));
+        const res = computeGoldPurchasePrice({
+          pricePerTroyOunceUsd: ouncePrice,
+          usdToXafRate: usdToXaf,
+          karat: numericK,
+          category: goldCategoryLabel,
+          config: purchaseFormulaConfig,
+        });
+        const val =
+          purchaseFormulaConfig.useParallelRateInPurchases && res.parallelPricePerGram > 0
+            ? res.parallelPricePerGram
+            : res.pricePerGram;
+        karatPricesXaf[kLabel] = Math.round(val);
+      }
+
+      const firstPositive = carats.map((k) => karatPricesXaf[k] || 0).find((v) => v > 0) || 0;
+      const today = new Date().toISOString().slice(0, 10);
+      const untilWeek = new Date(Date.now() + 7 * 86400_000).toISOString().slice(0, 16);
+
+      await onSaveGoldPrice({
+        category: cat,
+        pricePerGramXaf: firstPositive,
+        karatPricesXaf,
+        unit: 'gramme',
+        source: 'software_base',
+        status: 'draft',
+        validFrom: today,
+        validUntil: goldDrafts[cat].validUntil || untilWeek,
+      });
+
+      setFeedback({
+        type: 'success',
+        text: `Tarifs ${cat === 'OR_BRUT' ? 'Or brut' : 'Bijoux'} pré-remplis par gramme (${carats.map((k) => `${k.toLowerCase()}: ${formatMoney(karatPricesXaf[k])}`).join(' · ')} FCFA/g). Vérifiez puis validez.`,
+      });
+    } catch (err) {
+      setFeedback({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Calcul automatique impossible.',
+      });
+    } finally {
+      setSyncingSoftware(false);
+      setSyncingCategory(null);
     }
   };
 
@@ -379,7 +493,7 @@ export const WhatsAppPricesStockTab: React.FC<WhatsAppPricesStockTabProps> = ({
       <AppPanel className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <SectionHeading
-            title="Prix d’achat de l’Or (Or brut, Or fondu, Bijoux)"
+            title="Prix d’achat de l’Or (Or brut /g par carat, Or fondu /carat, Bijoux /g par carat)"
             icon={<Coins size={18} />}
           />
           <button
@@ -388,24 +502,34 @@ export const WhatsAppPricesStockTab: React.FC<WhatsAppPricesStockTabProps> = ({
             onClick={() => void handleSyncFonduFromSoftware()}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#FFF4D6] hover:bg-[#FCE8B2] border border-[#E8D8BE] text-[#8F630A] text-xs font-extrabold cursor-pointer disabled:opacity-50"
           >
-            {syncingSoftware ? (
+            {syncingCategory === 'OR_FONDU' ? (
               <Loader2 size={14} className="animate-spin" />
             ) : (
               <Sparkles size={14} />
             )}
-            <span>Importer cours de base logiciel (Or fondu)</span>
+            <span>Importer cours logiciel (Or fondu / carat)</span>
           </button>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {GOLD_CATEGORIES.map(({ key, title, subtitle, frequencyLabel }) => {
             const q = goldDrafts[key];
+            const isFondu = key === 'OR_FONDU';
+            const requiredCarats =
+              key === 'OR_BRUT' ? OR_BRUT_CARATS : key === 'BIJOUX' ? BIJOUX_CARATS : [];
+            const ref24k =
+              isFondu && q.reference24kPerGramXaf && q.reference24kPerGramXaf > 0
+                ? q.reference24kPerGramXaf
+                : isFondu && q.pricePerGramXaf > 0
+                  ? Math.round(q.pricePerGramXaf * 24)
+                  : 0;
+
             return (
               <div
                 key={key}
                 className="p-4 rounded-2xl bg-[#FAF8F3] border border-[#E8D8BE] space-y-3 flex flex-col justify-between"
               >
-                <div className="space-y-2">
+                <div className="space-y-2.5">
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <div className="text-sm font-black text-[#192A24]">{title}</div>
@@ -415,49 +539,144 @@ export const WhatsAppPricesStockTab: React.FC<WhatsAppPricesStockTabProps> = ({
                   </div>
                   <p className="text-[11px] text-[#555B54]">{subtitle}</p>
 
-                  <div>
-                    <label className="block text-[11px] font-bold text-[#7D8176] mb-1">
-                      Prix d’achat ({q.currency} / {q.unit})
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      value={q.pricePerGramXaf || ''}
-                      onChange={(e) =>
-                        updateGoldField(key, {
-                          pricePerGramXaf: Number(e.target.value) || 0,
-                          status: 'draft',
-                        })
-                      }
-                      placeholder="Ex: 48500"
-                      className="w-full px-3 py-2 rounded-xl bg-white border border-[#E8D8BE] text-sm font-extrabold text-[#192A24]"
-                    />
-                  </div>
+                  {isFondu ? (
+                    <>
+                      <div>
+                        <label className="block text-[11px] font-bold text-[#7D8176] mb-1">
+                          Prix d’achat ({q.currency || 'FCFA'} / carat)
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={q.pricePerGramXaf || ''}
+                          onChange={(e) => {
+                            const val = Number(e.target.value) || 0;
+                            updateGoldField('OR_FONDU', {
+                              pricePerGramXaf: val,
+                              reference24kPerGramXaf: val > 0 ? Math.round(val * 24) : 0,
+                              unit: 'carat',
+                              status: 'draft',
+                            });
+                          }}
+                          placeholder="Ex: 3004.97"
+                          className="w-full px-3 py-2 rounded-xl bg-white border border-[#E8D8BE] text-sm font-extrabold text-[#192A24]"
+                        />
+                        {q.pricePerGramXaf > 0 && (
+                          <div className="mt-1.5 px-2.5 py-1.5 rounded-lg bg-[#FFF4D6]/60 border border-[#E8D8BE] text-[10px] font-semibold text-[#7A5610]">
+                            Formule Fondu : ({formatMoney(ref24k)} F / 24) ={' '}
+                            <strong>{formatPriceCard(q.pricePerGramXaf, 2)} FCFA / carat</strong>
+                          </div>
+                        )}
+                      </div>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[10px] font-bold text-[#7D8176] mb-1">
-                        Unité
-                      </label>
-                      <input
-                        type="text"
-                        value={q.unit}
-                        onChange={(e) => updateGoldField(key, { unit: e.target.value })}
-                        className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-[#E8D8BE] text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-[#7D8176] mb-1">
-                        Devise réf.
-                      </label>
-                      <input
-                        type="text"
-                        value={q.currency}
-                        onChange={(e) => updateGoldField(key, { currency: e.target.value })}
-                        className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-[#E8D8BE] text-xs"
-                      />
-                    </div>
-                  </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10px] font-bold text-[#7D8176] mb-1">
+                            Unité
+                          </label>
+                          <input
+                            type="text"
+                            readOnly
+                            value="carat"
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-gray-100 border border-[#E8D8BE] text-xs font-bold text-[#555B54]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-[#7D8176] mb-1">
+                            Devise réf.
+                          </label>
+                          <input
+                            type="text"
+                            value={q.currency}
+                            onChange={(e) => updateGoldField(key, { currency: e.target.value })}
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-[#E8D8BE] text-xs"
+                          />
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-bold text-[#7D8176]">
+                            Tarifs par gramme ({q.currency || 'FCFA'} / g)
+                          </span>
+                          <button
+                            type="button"
+                            disabled={syncingSoftware}
+                            onClick={() => void handlePrefillKaratCategoryFromSoftware(key)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white hover:bg-[#FFF4D6] border border-[#E8D8BE] text-[10px] font-bold text-[#8F630A] cursor-pointer disabled:opacity-50"
+                          >
+                            {syncingCategory === key ? (
+                              <Loader2 size={11} className="animate-spin" />
+                            ) : (
+                              <Sparkles size={11} />
+                            )}
+                            <span>Calculer logiciel</span>
+                          </button>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          {requiredCarats.map((karatKey) => {
+                            const val = q.karatPricesXaf?.[karatKey] || 0;
+                            return (
+                              <div
+                                key={karatKey}
+                                className="flex items-center gap-2 bg-white px-2.5 py-1.5 rounded-xl border border-[#E8D8BE]"
+                              >
+                                <span className="w-10 text-xs font-black text-[#192A24] shrink-0">
+                                  {karatKey.toLowerCase()} :
+                                </span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={val || ''}
+                                  onChange={(e) =>
+                                    updateGoldKaratPrice(
+                                      key,
+                                      karatKey,
+                                      Number(e.target.value) || 0
+                                    )
+                                  }
+                                  placeholder="0"
+                                  className="w-full text-right text-xs font-extrabold text-[#192A24] bg-transparent outline-none"
+                                />
+                                <span className="text-[10px] font-bold text-[#7D8176] shrink-0">
+                                  FCFA / g
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10px] font-bold text-[#7D8176] mb-1">
+                            Unité
+                          </label>
+                          <input
+                            type="text"
+                            readOnly
+                            value="gramme"
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-gray-100 border border-[#E8D8BE] text-xs font-bold text-[#555B54]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-[#7D8176] mb-1">
+                            Devise réf.
+                          </label>
+                          <input
+                            type="text"
+                            value={q.currency}
+                            onChange={(e) => updateGoldField(key, { currency: e.target.value })}
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-[#E8D8BE] text-xs"
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
 
                   <div>
                     <label className="block text-[10px] font-bold text-[#7D8176] mb-1">

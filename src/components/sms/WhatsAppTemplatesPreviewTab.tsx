@@ -202,26 +202,31 @@ export const WhatsAppTemplatesPreviewTab: React.FC<WhatsAppTemplatesPreviewTabPr
             title="Modèles de messages WhatsApp (Section 6 · 5 catégories)"
             icon={<FileText size={18} />}
           />
-          <div className="text-[11px] text-[#7D8176]">
-            Variables supportées :{' '}
-            <code className="px-1.5 py-0.5 rounded bg-[#FAF8F3] border border-[#E8D8BE]">
-              {'{nom}'}
-            </code>{' '}
-            <code className="px-1.5 py-0.5 rounded bg-[#FAF8F3] border border-[#E8D8BE]">
-              {'{prix}'}
-            </code>{' '}
-            <code className="px-1.5 py-0.5 rounded bg-[#FAF8F3] border border-[#E8D8BE]">
-              {'{devise}'}
-            </code>{' '}
-            <code className="px-1.5 py-0.5 rounded bg-[#FAF8F3] border border-[#E8D8BE]">
-              {'{prix_achat}'}
-            </code>{' '}
-            <code className="px-1.5 py-0.5 rounded bg-[#FAF8F3] border border-[#E8D8BE]">
-              {'{prix_vente}'}
-            </code>{' '}
-            <code className="px-1.5 py-0.5 rounded bg-[#FAF8F3] border border-[#E8D8BE]">
-              {'{stock_disponible}'}
-            </code>
+          <div className="text-[11px] text-[#7D8176] flex flex-wrap items-center gap-1">
+            <span>Variables supportées :</span>
+            {[
+              '{nom}',
+              '{prix}',
+              '{prix_23k}',
+              '{prix_22k}',
+              '{prix_21k}',
+              '{prix_20k}',
+              '{prix_18k}',
+              '{prix_14k}',
+              '{prix_9k}',
+              '{tarifs}',
+              '{devise}',
+              '{prix_achat}',
+              '{prix_vente}',
+              '{stock_disponible}',
+            ].map((v) => (
+              <code
+                key={v}
+                className="px-1.5 py-0.5 rounded bg-[#FAF8F3] border border-[#E8D8BE]"
+              >
+                {v}
+              </code>
+            ))}
           </div>
         </div>
 
@@ -309,13 +314,70 @@ export const WhatsAppTemplatesPreviewTab: React.FC<WhatsAppTemplatesPreviewTabPr
                 Aperçu rendu WhatsApp ({WHATSAPP_CATEGORY_META[selectedCategory].shortLabel})
               </div>
               <div className="p-3.5 rounded-xl bg-white shadow-xs text-xs whitespace-pre-line text-[#192A24] leading-relaxed max-w-md">
-                {activeTemplate.body
-                  .replace(/\{nom\}/gi, 'Partenaire CAMS')
-                  .replace(/\{prix\}/gi, '48 500')
-                  .replace(/\{devise\}/gi, 'USD')
-                  .replace(/\{prix_achat\}/gi, '605')
-                  .replace(/\{prix_vente\}/gi, '620')
-                  .replace(/\{stock_disponible\}/gi, '15 000')}
+                {(() => {
+                  const fmtSample = (n: number) =>
+                    new Intl.NumberFormat('fr-FR', {
+                      minimumFractionDigits: Math.abs(n - Math.round(n)) >= 0.005 ? 2 : 0,
+                      maximumFractionDigits: 2,
+                    })
+                      .format(n)
+                      .replace(/\u202F/g, ' ');
+
+                  const brutQuote = automationState.goldPrices.OR_BRUT;
+                  const fonduQuote = automationState.goldPrices.OR_FONDU;
+                  const bijouxQuote = automationState.goldPrices.BIJOUX;
+
+                  const getKaratSample = (k: string, fallback: number) => {
+                    if (selectedCategory === 'OR_BRUT') {
+                      const v = brutQuote?.karatPricesXaf?.[k];
+                      return fmtSample(v && v > 0 ? v : fallback);
+                    }
+                    if (selectedCategory === 'BIJOUX') {
+                      const v = bijouxQuote?.karatPricesXaf?.[k];
+                      return fmtSample(v && v > 0 ? v : fallback);
+                    }
+                    return fmtSample(fallback);
+                  };
+
+                  const sampleFondu =
+                    fonduQuote?.pricePerGramXaf > 0
+                      ? fmtSample(fonduQuote.pricePerGramXaf)
+                      : '3 004,97';
+
+                  const p23k = getKaratSample('23K', 61500);
+                  const p22k = getKaratSample('22K', 58800);
+                  const p21k = getKaratSample('21K', 56100);
+                  const p20k = getKaratSample('20K', 53400);
+                  const p18k = getKaratSample('18K', 45200);
+                  const p14k = getKaratSample('14K', 35100);
+                  const p9k = getKaratSample('9K', 22600);
+
+                  const sampleTarifs =
+                    selectedCategory === 'OR_BRUT'
+                      ? `23k : ${p23k} FCFA / g\n22k : ${p22k} FCFA / g\n21k : ${p21k} FCFA / g\n20k : ${p20k} FCFA / g`
+                      : selectedCategory === 'BIJOUX'
+                        ? `22k : ${p22k} FCFA / g\n21k : ${p21k} FCFA / g\n18k : ${p18k} FCFA / g\n14k : ${p14k} FCFA / g\n9k : ${p9k} FCFA / g`
+                        : sampleFondu;
+
+                  return activeTemplate.body
+                    .replace(/\{nom\}/gi, 'Partenaire CAMS')
+                    .replace(/\{tarifs\}/gi, sampleTarifs)
+                    .replace(
+                      /\{prix\}/gi,
+                      selectedCategory === 'OR_FONDU' ? sampleFondu : sampleTarifs
+                    )
+                    .replace(/\{prix_23k\}/gi, p23k)
+                    .replace(/\{prix_22k\}/gi, p22k)
+                    .replace(/\{prix_21k\}/gi, p21k)
+                    .replace(/\{prix_20k\}/gi, p20k)
+                    .replace(/\{prix_18k\}/gi, p18k)
+                    .replace(/\{prix_14k\}/gi, p14k)
+                    .replace(/\{prix_9k\}/gi, p9k)
+                    .replace(/\{devise\}/gi, 'USD')
+                    .replace(/\{prix_achat\}/gi, '605')
+                    .replace(/\{prix_vente\}/gi, '620')
+                    .replace(/\{stock_disponible\}/gi, '15 000');
+                })()}
               </div>
               <p className="text-[11px] text-[#555B54]">
                 Conforme Section 13 : utilisez un nom de modèle approuvé par Meta pour les diffusions hors fenêtre client de 24 heures.

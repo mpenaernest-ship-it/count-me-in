@@ -33,6 +33,7 @@ import {
   ArrowUpDown,
   Trash2,
   ShieldAlert,
+  MessageSquare,
 } from 'lucide-react';
 import { useAppStore } from '../../context/AppContext';
 import { AppPanel, PageHeading, SectionHeading, Modal } from '../common/UIComponents';
@@ -58,6 +59,14 @@ import {
 } from '../../types';
 import { OfficialBankDepositSlipModal } from '../banks/OfficialBankDepositSlipModal';
 import { BankDepositForm } from '../banks/BankDepositForm';
+import {
+  CaisseWhatsAppNotifyResult,
+  computeContactNetPositionXaf,
+  getCaisseAutoWhatsappEnabled,
+  resolveContactRecord,
+  sendCaisseWhatsAppNotification,
+  setCaisseAutoWhatsappEnabled,
+} from '../../utils/caisseNotification';
 
 const EXPENSE_CATEGORIES = [
   'Dépense courante',
@@ -134,6 +143,9 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
   const [caisseOpexMode, setCaisseOpexMode] = useState<boolean>(!canDepotRetrait && canDepenses);
   const [caisseOpexCategory, setCaisseOpexCategory] = useState<string>('Dépense courante');
   const [caisseFeedback, setCaisseFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [autoNotifyWhatsapp, setAutoNotifyWhatsapp] = useState<boolean>(() => getCaisseAutoWhatsappEnabled());
+  const [waNotifyFeedback, setWaNotifyFeedback] = useState<CaisseWhatsAppNotifyResult | null>(null);
+  const [clientTransferWaFeedback, setClientTransferWaFeedback] = useState<CaisseWhatsAppNotifyResult | null>(null);
   const [apercuFilterByContact, setApercuFilterByContact] = useState<boolean>(true);
   const [contactAllAccounts, setContactAllAccounts] = useState<boolean>(true);
   const [historyScope, setHistoryScope] = useState<'account' | 'all'>('account');
@@ -1066,9 +1078,61 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
     return { targetType: 'auto' };
   };
 
+  const dispatchCaisseContactWhatsapp = ({
+    direction,
+    amountXaf,
+    contactName,
+    contactReference,
+    phone,
+    accountFallback,
+    details,
+    txRef,
+    beforeBalanceXaf,
+    deltaXaf,
+    target = 'caisse',
+  }: {
+    direction: 'CREDIT' | 'DEBIT' | 'COMPENSATION';
+    amountXaf: number;
+    contactName: string;
+    contactReference?: string;
+    phone?: string;
+    accountFallback?: string;
+    details: string;
+    txRef: string;
+    beforeBalanceXaf: number;
+    deltaXaf: number;
+    target?: 'caisse' | 'client_transfer';
+  }) => {
+    const matched = resolveContactRecord(store.contacts, contactName, contactReference, phone);
+    const resolvedName = matched?.name || contactName;
+    const resolvedPhone = phone || matched?.phone || '';
+    const resolvedFallback =
+      accountFallback || matched?.bankAccountNumber || matched?.reference || contactReference;
+    const availableBalanceAfterXaf = beforeBalanceXaf + deltaXaf;
+
+    void sendCaisseWhatsAppNotification({
+      enabled: autoNotifyWhatsapp,
+      direction,
+      amountXaf,
+      contactName: resolvedName,
+      phone: resolvedPhone,
+      accountFallback: resolvedFallback,
+      details,
+      txRef,
+      availableBalanceAfterXaf,
+    }).then((result) => {
+      if (target === 'client_transfer') {
+        setClientTransferWaFeedback(result);
+      } else {
+        setWaNotifyFeedback(result);
+      }
+    });
+  };
+
   // Exécuter un Dépôt au compte sélectionné (encaissement créance, ou règlement d'achat d'or si sélectionné explicitement)
   const handleCaisseDepot = () => {
     setCaisseFeedback(null);
+    setWaNotifyFeedback(null);
     if (!canDepotRetrait) {
       setCaisseFeedback({ type: 'error', message: 'Vous n’avez pas accès aux dépôts de caisse.' });
       return;
@@ -1078,12 +1142,12 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
       setCaisseFeedback({ type: 'error', message: 'Veuillez saisir un montant strictement positif.' });
       return;
     }
-    const contactLabel =
+    const explicitContactName = (
       selectedContactPosition?.name ||
       contactSearchContext.matchedContact?.name ||
-      caisseContact.trim() ||
-      store.userName ||
-      'Gérant';
+      caisseContact.trim()
+    ).trim();
+    const contactLabel = explicitContactName || store.userName || 'Gérant';
     const motifLabel = caisseMotif.trim() || 'Dépôt au compte';
     const selectedRecItem = selectedContactOpenItems.receivables.find(
       (i) => i.key === caisseSettlementTarget
@@ -1096,6 +1160,28 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
       caisseSettlementTarget !== 'FREE' &&
       (selectedRecItem !== undefined ||
         (caisseSettlementTarget === 'AUTO' && selectedContactOpenItems.receivables.length > 0));
+
+    const beforeBalanceXaf =
+      selectedContactPosition?.netPositionXaf ??
+      (explicitContactName
+        ? computeContactNetPositionXaf(
+            {
+              name: explicitContactName,
+              reference: contactSearchContext.matchedContact?.reference,
+              phone: contactSearchContext.matchedContact?.phone,
+            },
+            {
+              contacts: store.contacts,
+              purchases: store.purchases,
+              saleRecords: store.saleRecords,
+              loans: store.loans,
+              operations: store.operations,
+              currencyStockMovements: store.currencyStockMovements,
+              goldCurrencyMovements: store.goldCurrencyMovements,
+              officialUsdRate: store.purchaseFormulaConfig.officialUsdRate,
+            }
+          )
+        : 0);
 
     try {
       if (selectedPayItem && selectedContactPosition) {
@@ -1118,6 +1204,21 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
           type: 'success',
           message: res.summary,
         });
+        const settledDesc = res.settledItems
+          .map((item) => item.detailText || item.reference)
+          .filter(Boolean)
+          .join(' · ');
+        dispatchCaisseContactWhatsapp({
+          direction: 'DEBIT',
+          amountXaf: amt,
+          contactName: selectedContactPosition.name,
+          contactReference: selectedContactPosition.reference,
+          phone: selectedContactPosition.phone,
+          details: settledDesc || caisseMotif.trim() || 'REGLEMENT COMPTE FOURNISSEUR',
+          txRef: res.reference,
+          beforeBalanceXaf,
+          deltaXaf: -amt,
+        });
       } else if (shouldLinkSettlement && selectedContactPosition) {
         const parsed = parseSettlementTargetKey(
           selectedRecItem ? selectedRecItem.key : 'AUTO'
@@ -1139,8 +1240,23 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
           type: 'success',
           message: res.summary,
         });
+        const settledDesc = res.settledItems
+          .map((item) => item.detailText || item.reference)
+          .filter(Boolean)
+          .join(' · ');
+        dispatchCaisseContactWhatsapp({
+          direction: 'CREDIT',
+          amountXaf: amt,
+          contactName: selectedContactPosition.name,
+          contactReference: selectedContactPosition.reference,
+          phone: selectedContactPosition.phone,
+          details: settledDesc || caisseMotif.trim() || 'DEPOT ENCAISSEMENT',
+          txRef: res.reference,
+          beforeBalanceXaf,
+          deltaXaf: amt,
+        });
       } else {
-        store.depositCash({
+        const res = store.depositCash({
           account: caisseSourceAccount,
           amount: amt,
           depositorName: contactLabel,
@@ -1152,6 +1268,19 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
           type: 'success',
           message: `Dépôt de ${formatMoney(amt)} FCFA crédité sur ${caisseSourceAccount} (${contactLabel}).`,
         });
+        if (explicitContactName) {
+          dispatchCaisseContactWhatsapp({
+            direction: 'CREDIT',
+            amountXaf: amt,
+            contactName: explicitContactName,
+            contactReference: selectedContactPosition?.reference || contactSearchContext.matchedContact?.reference,
+            phone: selectedContactPosition?.phone || contactSearchContext.matchedContact?.phone,
+            details: motifLabel.toUpperCase(),
+            txRef: res.reference,
+            beforeBalanceXaf,
+            deltaXaf: amt,
+          });
+        }
       }
       setCaisseAmount('');
       setCaisseMotif('');
@@ -1168,6 +1297,7 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
   // Régler directement un achat d'or brut/bijoux à crédit ou partiel via un dépôt sur compte fournisseur depuis la Caisse
   const handleSettleGoldPurchaseByDeposit = () => {
     setCaisseFeedback(null);
+    setWaNotifyFeedback(null);
     if (!canDepotRetrait) {
       setCaisseFeedback({ type: 'error', message: 'Vous n’avez pas accès aux règlements depuis la Caisse.' });
       return;
@@ -1191,6 +1321,8 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
       return;
     }
 
+    const beforeBalanceXaf = selectedContactPosition.netPositionXaf;
+
     try {
       const res = store.settleSourceAccountFromCash({
         contactName: selectedContactPosition.name,
@@ -1210,6 +1342,21 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
         type: 'success',
         message: res.summary,
       });
+      const settledDesc = res.settledItems
+        .map((item) => item.detailText || item.reference)
+        .filter(Boolean)
+        .join(' · ');
+      dispatchCaisseContactWhatsapp({
+        direction: 'DEBIT',
+        amountXaf: amt,
+        contactName: selectedContactPosition.name,
+        contactReference: selectedContactPosition.reference,
+        phone: selectedContactPosition.phone,
+        details: settledDesc || caisseMotif.trim() || 'REGLEMENT ACHAT OR',
+        txRef: res.reference,
+        beforeBalanceXaf,
+        deltaXaf: -amt,
+      });
       setCaisseAmount('');
       setCaisseMotif('');
       setRedirectBanner(null);
@@ -1225,13 +1372,15 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
   // Exécuter un Retrait en cash (lié aux dettes fournisseur si applicable) ou une Dépense OPEX
   const handleCaisseRetrait = () => {
     setCaisseFeedback(null);
+    setWaNotifyFeedback(null);
     const amt = parseFloat(caisseAmount.replace(/\s+/g, '').replace(',', '.') || '0');
     if (amt <= 0 || !Number.isFinite(amt)) {
       setCaisseFeedback({ type: 'error', message: 'Veuillez saisir un montant strictement positif.' });
       return;
     }
-    const contactLabel =
-      selectedContactPosition?.name || contactSearchContext.matchedContact?.name || caisseContact.trim();
+    const contactLabel = (
+      selectedContactPosition?.name || contactSearchContext.matchedContact?.name || caisseContact.trim()
+    ).trim();
     const motifLabel = caisseMotif.trim();
 
     if (caisseOpexMode) {
@@ -1285,6 +1434,28 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
       (selectedPayItem !== undefined ||
         (caisseSettlementTarget === 'AUTO' && selectedContactOpenItems.payables.length > 0));
 
+    const beforeBalanceXaf =
+      selectedContactPosition?.netPositionXaf ??
+      (contactLabel
+        ? computeContactNetPositionXaf(
+            {
+              name: contactLabel,
+              reference: contactSearchContext.matchedContact?.reference,
+              phone: contactSearchContext.matchedContact?.phone,
+            },
+            {
+              contacts: store.contacts,
+              purchases: store.purchases,
+              saleRecords: store.saleRecords,
+              loans: store.loans,
+              operations: store.operations,
+              currencyStockMovements: store.currencyStockMovements,
+              goldCurrencyMovements: store.goldCurrencyMovements,
+              officialUsdRate: store.purchaseFormulaConfig.officialUsdRate,
+            }
+          )
+        : 0);
+
     try {
       if (shouldLinkSettlement && selectedContactPosition) {
         const parsed = parseSettlementTargetKey(
@@ -1306,8 +1477,23 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
           type: 'success',
           message: res.summary,
         });
+        const settledDesc = res.settledItems
+          .map((item) => item.detailText || item.reference)
+          .filter(Boolean)
+          .join(' · ');
+        dispatchCaisseContactWhatsapp({
+          direction: 'DEBIT',
+          amountXaf: amt,
+          contactName: selectedContactPosition.name,
+          contactReference: selectedContactPosition.reference,
+          phone: selectedContactPosition.phone,
+          details: settledDesc || motifLabel || 'RETRAIT REGLEMENT',
+          txRef: res.reference,
+          beforeBalanceXaf,
+          deltaXaf: -amt,
+        });
       } else {
-        store.withdrawCash({
+        const res = store.withdrawCash({
           account: caisseSourceAccount,
           amount: amt,
           beneficiaryName: contactLabel || 'Bénéficiaire',
@@ -1318,6 +1504,19 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
           type: 'success',
           message: `Retrait de ${formatMoney(amt)} FCFA débité sur ${caisseSourceAccount} (${contactLabel || 'Bénéficiaire'}).`,
         });
+        if (contactLabel) {
+          dispatchCaisseContactWhatsapp({
+            direction: 'DEBIT',
+            amountXaf: amt,
+            contactName: contactLabel,
+            contactReference: selectedContactPosition?.reference || contactSearchContext.matchedContact?.reference,
+            phone: selectedContactPosition?.phone || contactSearchContext.matchedContact?.phone,
+            details: (motifLabel || 'RETRAIT CAISSE').toUpperCase(),
+            txRef: res.reference,
+            beforeBalanceXaf,
+            deltaXaf: -amt,
+          });
+        }
       }
       setCaisseAmount('');
       setCaisseMotif('');
@@ -1409,6 +1608,7 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
     e.preventDefault();
     if (!settlingSourceAccount) return;
     setSettleError(null);
+    setWaNotifyFeedback(null);
     const amt = parseFloat(settleAmount.replace(/\s+/g, '').replace(',', '.') || '0');
     if (amt <= 0 || !Number.isFinite(amt)) {
       setSettleError('Veuillez saisir un montant strictement positif.');
@@ -1416,6 +1616,9 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
     }
 
     const parsed = parseSettlementTargetKey(settleTargetKey);
+    const beforeBalanceXaf = settlingSourceAccount.netPositionXaf;
+    const isComp = settleMode === 'compensate_cash_balance';
+
     try {
       const res = store.settleSourceAccountFromCash({
         contactName: settlingSourceAccount.name,
@@ -1428,6 +1631,29 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
         mode: settleMode,
         date: settleDate,
         note: settleNote.trim() || undefined,
+      });
+
+      const settledDesc = res.settledItems
+        .map((item) => item.detailText || item.reference)
+        .filter(Boolean)
+        .join(' · ');
+      dispatchCaisseContactWhatsapp({
+        direction: isComp
+          ? 'COMPENSATION'
+          : settleDirection === 'collect_in'
+          ? 'CREDIT'
+          : 'DEBIT',
+        amountXaf: amt,
+        contactName: settlingSourceAccount.name,
+        contactReference: settlingSourceAccount.reference,
+        phone: settlingSourceAccount.phone,
+        details:
+          settledDesc ||
+          settleNote.trim() ||
+          (settleDirection === 'collect_in' ? 'DEPOT ENCAISSEMENT' : 'RETRAIT REGLEMENT'),
+        txRef: res.reference,
+        beforeBalanceXaf,
+        deltaXaf: isComp ? 0 : settleDirection === 'collect_in' ? amt : -amt,
       });
 
       setCaisseContact(settlingSourceAccount.name);
@@ -2280,6 +2506,7 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
     e.preventDefault();
     setClientTransferSuccess(null);
     setClientTransferError(null);
+    setClientTransferWaFeedback(null);
 
     const selectedContactObj = !isNewClient
       ? store.contacts.find((c) => c.reference === selectedContactRef)
@@ -2297,6 +2524,26 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
     }
 
     const feeAmount = clientTransferFee.trim() ? parseFloat(clientTransferFee.replace(',', '.') || '0') : 0;
+    const safeFee = Number.isFinite(feeAmount) && feeAmount > 0 ? feeAmount : 0;
+    const matchedContact =
+      selectedContactObj || resolveContactRecord(store.contacts, clientName, undefined, undefined);
+    const beforeBalanceXaf = computeContactNetPositionXaf(
+      {
+        name: matchedContact?.name || clientName,
+        reference: matchedContact?.reference,
+        phone: matchedContact?.phone,
+      },
+      {
+        contacts: store.contacts,
+        purchases: store.purchases,
+        saleRecords: store.saleRecords,
+        loans: store.loans,
+        operations: store.operations,
+        currencyStockMovements: store.currencyStockMovements,
+        goldCurrencyMovements: store.goldCurrencyMovements,
+        officialUsdRate: store.purchaseFormulaConfig.officialUsdRate,
+      }
+    );
 
     try {
       const newTransfer = store.transferToClient({
@@ -2320,6 +2567,35 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
           : '';
       const successMsg = `Virement de ${formatMoney(amount)} FCFA en faveur de ${clientName} effectué avec succès depuis ${clientTransferFrom}.${settledMsg}`;
       setClientTransferSuccess(successMsg);
+
+      const transferDetails = [
+        'VIREMENT',
+        clientBank.trim(),
+        clientTransferReason.trim() || 'REGLEMENT CLIENT',
+        newTransfer.settledPurchaseReferences && newTransfer.settledPurchaseReferences.length > 0
+          ? newTransfer.settledPurchaseReferences.join(' ')
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
+      const txRef =
+        clientBankReference.trim() ||
+        newTransfer.reference ||
+        newTransfer.id.replace(/^op-cltr-/, 'VIR-');
+
+      dispatchCaisseContactWhatsapp({
+        direction: 'DEBIT',
+        amountXaf: amount,
+        contactName: clientName,
+        contactReference: matchedContact?.reference || selectedContactObj?.reference,
+        phone: matchedContact?.phone || selectedContactObj?.phone,
+        accountFallback: clientAccountNumber.trim() || matchedContact?.reference,
+        details: transferDetails,
+        txRef,
+        beforeBalanceXaf,
+        deltaXaf: -(amount + safeFee),
+        target: 'client_transfer',
+      });
 
       setReceiptEntry(newTransfer);
 
@@ -2693,7 +2969,24 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
                 Sélectionnez un client ou fournisseur comme Compte Source pour voir ce qu&apos;il possède chez nous, ce que nous lui devons ou ce qu&apos;il nous doit.
               </p>
             </div>
-            <div className="flex flex-wrap items-center gap-4 text-xs">
+            <div className="flex flex-wrap items-center gap-3 text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !autoNotifyWhatsapp;
+                  setAutoNotifyWhatsapp(next);
+                  setCaisseAutoWhatsappEnabled(next);
+                }}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-[11px] font-bold transition-colors cursor-pointer ${
+                  autoNotifyWhatsapp
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                    : 'bg-[#FAF8F3] border-[#E8D8BE] text-[#7D8176]'
+                }`}
+                title="Envoyer automatiquement un message WhatsApp de solde au client ou fournisseur à chaque opération de caisse"
+              >
+                <MessageSquare size={13} className={autoNotifyWhatsapp ? 'text-emerald-600' : 'text-[#7D8176]'} />
+                <span>Alerte WhatsApp auto : {autoNotifyWhatsapp ? 'Active' : 'Désactivée'}</span>
+              </button>
               <div>
                 <span className="text-[#7D8176]">Trésorerie ({caisseSourceAccount}) : </span>
                 <span
@@ -2814,6 +3107,47 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
                       <AlertCircle size={15} className="shrink-0 mt-0.5 text-red-600" />
                     )}
                     <span>{caisseFeedback.message}</span>
+                  </div>
+                )}
+
+                {waNotifyFeedback && (
+                  <div
+                    className={`p-3 rounded-xl border text-xs space-y-2 ${
+                      waNotifyFeedback.status === 'sent'
+                        ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
+                        : waNotifyFeedback.status === 'disabled'
+                        ? 'bg-[#FAF8F3] border-[#E8D8BE] text-[#7D8176]'
+                        : 'bg-amber-50 border-amber-200 text-amber-950'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-start gap-1.5 font-semibold">
+                        <MessageSquare size={14} className="shrink-0 mt-0.5" />
+                        <span>{waNotifyFeedback.infoText}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setWaNotifyFeedback(null)}
+                        className="text-gray-500 hover:text-gray-900 shrink-0 cursor-pointer"
+                        aria-label="Fermer notification WhatsApp"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                    <pre className="p-2 rounded-lg bg-white/80 border border-black/10 text-[10px] font-mono whitespace-pre-wrap break-words text-[#192A24]">
+                      {waNotifyFeedback.messageText}
+                    </pre>
+                    {waNotifyFeedback.status !== 'sent' && waNotifyFeedback.manualWhatsAppUrl && (
+                      <a
+                        href={waNotifyFeedback.manualWhatsAppUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#008B62] hover:bg-[#007452] text-white text-[11px] font-bold"
+                      >
+                        <ExternalLink size={12} />
+                        <span>Envoyer manuellement sur WhatsApp</span>
+                      </a>
+                    )}
                   </div>
                 )}
 
@@ -4585,6 +4919,46 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
                     <span>Afficher / Imprimer le reçu de virement</span>
                   </button>
                 )}
+              </div>
+            )}
+
+            {clientTransferWaFeedback && (
+              <div
+                className={`mb-4 p-3 rounded-xl border text-xs space-y-2 ${
+                  clientTransferWaFeedback.status === 'sent'
+                    ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
+                    : 'bg-amber-50 border-amber-200 text-amber-950'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-start gap-1.5 font-semibold">
+                    <MessageSquare size={14} className="shrink-0 mt-0.5" />
+                    <span>{clientTransferWaFeedback.infoText}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setClientTransferWaFeedback(null)}
+                    className="text-gray-500 hover:text-gray-900 shrink-0 cursor-pointer"
+                    aria-label="Fermer"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+                <pre className="p-2 rounded-lg bg-white/80 border border-black/10 text-[10px] font-mono whitespace-pre-wrap break-words text-[#192A24]">
+                  {clientTransferWaFeedback.messageText}
+                </pre>
+                {clientTransferWaFeedback.status !== 'sent' &&
+                  clientTransferWaFeedback.manualWhatsAppUrl && (
+                    <a
+                      href={clientTransferWaFeedback.manualWhatsAppUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#008B62] hover:bg-[#007452] text-white text-[11px] font-bold"
+                    >
+                      <ExternalLink size={12} />
+                      <span>Envoyer manuellement sur WhatsApp</span>
+                    </a>
+                  )}
               </div>
             )}
 

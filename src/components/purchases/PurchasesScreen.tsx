@@ -44,6 +44,12 @@ import { GoldPriceService } from '../../services/goldPriceService';
 import { ExchangeRateService } from '../../services/exchangeRateService';
 import { GoldCategory, PurchaseRecord, GoldPriceQuote } from '../../types';
 import { db, firebaseApp } from '../../firebase/config';
+import {
+  buildPurchaseWeightKaratDetails,
+  computeContactNetPositionXaf,
+  getCaisseAutoWhatsappEnabled,
+  sendCaisseWhatsAppNotification,
+} from '../../utils/caisseNotification';
 
 const sendPurchaseSlipToWhatsApp = httpsCallable<
   { purchaseId: string; recipientPhone?: string },
@@ -507,6 +513,24 @@ export const PurchasesScreen: React.FC<{
       }
     }
 
+    const beforeBalanceXaf = computeContactNetPositionXaf(
+      {
+        name: selectedSellerContact?.name || supplier,
+        reference: selectedSellerContact?.reference,
+        phone: selectedSellerContact?.phone,
+      },
+      {
+        contacts: store.contacts,
+        purchases: store.purchases,
+        saleRecords: store.saleRecords,
+        loans: store.loans,
+        operations: store.operations,
+        currencyStockMovements: store.currencyStockMovements,
+        goldCurrencyMovements: store.goldCurrencyMovements,
+        officialUsdRate: store.purchaseFormulaConfig.officialUsdRate,
+      }
+    );
+
     let newlyCreatedPurchases: PurchaseRecord[] = [];
     try {
       if (editingPurchase) {
@@ -587,10 +611,22 @@ export const PurchasesScreen: React.FC<{
 
     if (newlyCreatedPurchases.length > 0) {
       const initialRecipient = resolvePurchaseRecipient(newlyCreatedPurchases);
+      const totalPurchaseAmountXaf = newlyCreatedPurchases.reduce((sum, p) => sum + p.amount, 0);
       setSelectedBatchPurchases(newlyCreatedPurchases);
       setSelectedPurchase(newlyCreatedPurchases[0]);
       setManualRecipientPhone(initialRecipient.phone);
       setEditingRecipientPhone(false);
+      void sendCaisseWhatsAppNotification({
+        enabled: getCaisseAutoWhatsappEnabled(),
+        direction: 'CREDIT',
+        amountXaf: totalPurchaseAmountXaf,
+        contactName: initialRecipient.name,
+        phone: initialRecipient.phone,
+        accountFallback: selectedSellerContact?.reference,
+        details: buildPurchaseWeightKaratDetails(newlyCreatedPurchases, 'ACHAT'),
+        txRef: newlyCreatedPurchases[0]?.reference || `ACH-${Date.now().toString().slice(-6)}`,
+        availableBalanceAfterXaf: beforeBalanceXaf + totalPurchaseAmountXaf,
+      });
       void sendPurchaseSlips(newlyCreatedPurchases, initialRecipient.phone);
     }
   };

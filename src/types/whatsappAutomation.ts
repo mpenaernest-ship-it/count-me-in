@@ -22,7 +22,7 @@ export const WHATSAPP_CATEGORY_META: Record<
     shortLabel: 'Or brut',
     contactType: 'Fournisseur',
     defaultFrequency: 'weekly',
-    priceSourceDescription: 'Prix saisi manuellement et validé',
+    priceSourceDescription: 'Prix par gramme (23K, 22K, 21K, 20K) validés',
   },
   OR_FONDU: {
     id: 'OR_FONDU',
@@ -30,7 +30,7 @@ export const WHATSAPP_CATEGORY_META: Record<
     shortLabel: 'Or fondu',
     contactType: 'Fournisseur',
     defaultFrequency: 'daily',
-    priceSourceDescription: 'Prix de base du logiciel (validé)',
+    priceSourceDescription: 'Prix au carat ((Prix 24K) / 24) validé',
   },
   BIJOUX: {
     id: 'BIJOUX',
@@ -38,7 +38,7 @@ export const WHATSAPP_CATEGORY_META: Record<
     shortLabel: 'Bijoux',
     contactType: 'Fournisseur',
     defaultFrequency: 'weekly',
-    priceSourceDescription: 'Prix saisi manuellement et validé',
+    priceSourceDescription: 'Prix par gramme (22K, 21K, 18K, 14K, 9K) validés',
   },
   FOURNISSEUR_DEVISES: {
     id: 'FOURNISSEUR_DEVISES',
@@ -68,11 +68,21 @@ export const ALL_WHATSAPP_CATEGORIES: WhatsAppBusinessCategory[] = [
 
 export type PriceApprovalStatus = 'draft' | 'validated' | 'expired';
 
+export const OR_BRUT_CARATS = ['23K', '22K', '21K', '20K'] as const;
+export const BIJOUX_CARATS = ['22K', '21K', '18K', '14K', '9K'] as const;
+
+export const GOLD_CARAT_LIST_BY_CATEGORY: Record<'OR_BRUT' | 'BIJOUX', readonly string[]> = {
+  OR_BRUT: OR_BRUT_CARATS,
+  BIJOUX: BIJOUX_CARATS,
+};
+
 export interface GoldPriceQuoteEntry {
   category: 'OR_BRUT' | 'OR_FONDU' | 'BIJOUX';
-  pricePerGramXaf: number;
-  unit: string; // 'gramme'
+  pricePerGramXaf: number; // Pour OR_FONDU : prix par carat ((Prix 24K) / 24). Pour OR_BRUT/BIJOUX : valeur de référence.
+  unit: string; // 'carat' pour OR_FONDU, 'gramme' pour OR_BRUT et BIJOUX
   currency: string; // 'FCFA'
+  karatPricesXaf?: Record<string, number>; // Prix par gramme pour chaque carat configuré
+  reference24kPerGramXaf?: number; // Prix 24K/g utilisé pour calculer le tarif au carat de l'or fondu
   source: 'manual' | 'software_base';
   status: PriceApprovalStatus;
   validFrom: string; // YYYY-MM-DD
@@ -279,8 +289,11 @@ export const DEFAULT_SECTION6_TEMPLATES: Omit<WhatsAppMessageTemplate, 'updatedA
 OFFRE D’ACHAT – OR BRUT
 
 Bonjour {nom},
-Voici nos prix d’achat pour cette semaine :
-Prix du gramme : {prix} FCFA
+Voici nos prix d’achat par gramme pour cette semaine :
+23k : {prix_23k} FCFA / g
+22k : {prix_22k} FCFA / g
+21k : {prix_21k} FCFA / g
+20k : {prix_20k} FCFA / g
 
 Nous restons disponibles pour vos transactions.
 Cordialement,
@@ -297,7 +310,7 @@ COURS DU JOUR – OR FONDU
 
 Bonjour {nom},
 Notre prix d’achat du jour est fixé à :
-{prix} FCFA / gramme.
+{prix} FCFA / carat.
 
 Merci pour votre confiance.
 CAMS GOLD.`,
@@ -312,8 +325,12 @@ CAMS GOLD.`,
 OFFRE D’ACHAT – BIJOUX
 
 Bonjour {nom},
-Voici notre prix d’achat hebdomadaire :
-{prix} FCFA / gramme.
+Voici nos prix d’achat hebdomadaires par gramme :
+22k : {prix_22k} FCFA / g
+21k : {prix_21k} FCFA / g
+18k : {prix_18k} FCFA / g
+14k : {prix_14k} FCFA / g
+9k : {prix_9k} FCFA / g
 
 Nous restons à votre disposition.
 CAMS GOLD.`,

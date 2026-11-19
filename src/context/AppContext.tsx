@@ -65,6 +65,8 @@ type AuthStatus = 'loading' | 'signedOut' | 'pending' | 'unverified' | 'active' 
 const isAppRole = (value: unknown): value is AppRole =>
   APP_ROLES.some((role) => role.id === value);
 
+const BOOTSTRAP_ADMIN_EMAIL = 'mohamoudsow45@gmail.com';
+
 const resolveAuthAccess = async (user: User): Promise<{
   status: AuthStatus;
   role?: AppRole;
@@ -76,11 +78,11 @@ const resolveAuthAccess = async (user: User): Promise<{
   const name = user.displayName || user.email || 'Utilisateur';
   if (!user.emailVerified) return { status: 'unverified', name };
 
+  const emailLower = (user.email || '').trim().toLowerCase();
   const profile = await getDoc(doc(db, 'users', user.uid));
   const data = profile.data();
   if (!profile.exists()) {
-    const emailLower = (user.email || '').toLowerCase();
-    if (emailLower === 'espoirmpena5@gmail.com' || emailLower === 'mpenaespoir95@gmail.com') {
+    if (emailLower === BOOTSTRAP_ADMIN_EMAIL) {
       await setDoc(doc(db, 'users', user.uid), {
         name,
         email: user.email,
@@ -90,6 +92,19 @@ const resolveAuthAccess = async (user: User): Promise<{
       return { status: 'active', role: 'ADMIN', name };
     }
     return { status: 'pending', name };
+  }
+  if (emailLower === BOOTSTRAP_ADMIN_EMAIL && (data?.active !== true || data?.role !== 'ADMIN')) {
+    await setDoc(
+      doc(db, 'users', user.uid),
+      {
+        name,
+        email: user.email,
+        role: 'ADMIN',
+        active: true,
+      },
+      { merge: true }
+    );
+    return { status: 'active', role: 'ADMIN', name };
   }
   if (data?.active !== true || !isAppRole(data.role)) {
     return { status: 'pending', name };
@@ -215,7 +230,7 @@ interface AppContextType {
     date?: string;
     reference?: string;
     account?: string;
-  }) => void;
+  }) => { reference: string; entry: LedgerEntry };
   withdrawCash: (params: {
     amount: number;
     beneficiaryName: string;
@@ -223,7 +238,7 @@ interface AppContextType {
     date?: string;
     reference?: string;
     account?: string;
-  }) => void;
+  }) => { reference: string; entry: LedgerEntry };
   addContact: (contact: Omit<Contact, 'reference'>) => void;
   importContacts: (contactsList: Array<Omit<Contact, 'reference'>>) => number;
   updateContact: (contactRef: string, updates: Partial<Omit<Contact, 'reference'>>) => void;
@@ -260,7 +275,18 @@ interface AppContextType {
     date?: string;
     note?: string;
     methodLabel?: string;
-  }) => { settledAmountXaf: number; summary: string };
+  }) => {
+    settledAmountXaf: number;
+    summary: string;
+    reference: string;
+    settledItems: Array<{
+      targetType: string;
+      id: string;
+      reference: string;
+      amountXaf: number;
+      detailText?: string;
+    }>;
+  };
   saveAppointment: (contactRef: string, appointment: string) => void;
   removeAppointment: (contactRef: string) => void;
   markOperationProcessed: (operationId: string) => void;
@@ -1812,6 +1838,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setOperations((prev) => [newEntry, ...prev]);
     FirebaseSyncService.saveOperation(newEntry);
+    return { reference: refStr, entry: newEntry };
   };
 
   const withdrawCash = ({
@@ -1874,6 +1901,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setOperations((prev) => [newEntry, ...prev]);
     FirebaseSyncService.saveOperation(newEntry);
+    return { reference: refStr, entry: newEntry };
   };
 
   const editOperation = (operationId: string, updates: Partial<LedgerEntry>) => {
@@ -4831,7 +4859,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     date?: string;
     note?: string;
     methodLabel?: string;
-  }): { settledAmountXaf: number; summary: string } => {
+  }): {
+    settledAmountXaf: number;
+    summary: string;
+    reference: string;
+    settledItems: Array<{
+      targetType: string;
+      id: string;
+      reference: string;
+      amountXaf: number;
+      detailText?: string;
+    }>;
+  } => {
     const roundedInput = Math.round(amountXaf);
     if (!Number.isFinite(roundedInput) || roundedInput <= 0) {
       throw new Error('Le montant du règlement doit être strictement positif.');
@@ -4880,6 +4919,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const isComp = mode === 'compensate_cash_balance';
     const createdOps: LedgerEntry[] = [];
     const settledLabels: string[] = [];
+    const settledItems: Array<{
+      targetType: string;
+      id: string;
+      reference: string;
+      amountXaf: number;
+      detailText?: string;
+    }> = [];
     let remainingToApply = roundedInput;
     let settledAgainstItems = 0;
 
@@ -4896,6 +4942,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setBankBalances(nextBalances);
       FirebaseSyncService.saveBankBalances(nextBalances);
 
+      const entryRef = `${isIncome ? 'DEP' : 'RET'}-${String(nowMs).slice(-6)}`;
       const entry: LedgerEntry = {
         id: `op-${isIncome ? 'cashdep' : 'cashret'}-${nowMs}`,
         title: `${isIncome ? 'Dépôt' : 'Retrait'} · ${cleanContact}`,
@@ -4910,7 +4957,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         depositor: isIncome ? cleanContact : undefined,
         beneficiary: !isIncome ? cleanContact : undefined,
         notes: cleanNote || 'Règlement solde cash',
-        reference: `${isIncome ? 'DEP' : 'RET'}-${String(nowMs).slice(-6)}`,
+        reference: entryRef,
         account: accountKey,
         isProcessed: true,
       };
@@ -4919,6 +4966,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return {
         settledAmountXaf: roundedInput,
         summary: `${isIncome ? 'Dépôt' : 'Retrait'} de ${roundedInput.toLocaleString('fr-FR')} FCFA enregistré sur ${accountKey} (${cleanContact}).`,
+        reference: entryRef,
+        settledItems,
       };
     }
 
@@ -5003,6 +5052,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           remainingToApply -= chunk;
           settledAgainstItems += chunk;
           settledLabels.push(`${p.reference} (${chunk.toLocaleString('fr-FR')} F)`);
+          const netW = p.netWeightGrams ?? p.grossWeightGrams ?? 0;
+          const rawK = (p.karat || '').replace(/[^\d.,]/g, '').replace(',', '.');
+          const kNum = parseFloat(rawK);
+          const kStr = Number.isFinite(kNum) ? String(kNum).replace('.', ',') : (p.karat || '').replace(/K$/i, '');
+          settledItems.push({
+            targetType: 'gold_purchase',
+            id: p.id,
+            reference: p.reference,
+            amountXaf: chunk,
+            detailText: [
+              'ACHAT',
+              netW > 0 ? `POIDS ${Number.isInteger(netW) ? netW : netW.toFixed(2).replace(/\.?0+$/, '').replace('.', ',')}g` : '',
+              kStr ? `CARAT ${kStr}` : '',
+              p.reference,
+            ]
+              .filter(Boolean)
+              .join(' '),
+          });
         }
       }
 
@@ -5070,6 +5137,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             remainingToApply -= chunk;
             settledAgainstItems += chunk;
             settledLabels.push(`Achat ${m.currency} (${chunk.toLocaleString('fr-FR')} F)`);
+            settledItems.push({
+              targetType: 'currency_purchase',
+              id: m.id,
+              reference: m.currency,
+              amountXaf: chunk,
+              detailText: `ACHAT DEVISE ${Math.abs(m.amount)} ${m.currency}`,
+            });
           }
         };
         applyCurrencyPayables(nextCurMovements, 'physical');
@@ -5128,6 +5202,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           remainingToApply -= chunk;
           settledAgainstItems += chunk;
           settledLabels.push(`${l.reference} (${chunk.toLocaleString('fr-FR')} F)`);
+          settledItems.push({
+            targetType: 'loan',
+            id: l.id,
+            reference: l.reference,
+            amountXaf: chunk,
+            detailText: `REMBOURSEMENT EMPRUNT ${l.reference}`,
+          });
         }
       }
     } else {
@@ -5197,6 +5278,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             remainingToApply -= chunk;
             settledAgainstItems += chunk;
             settledLabels.push(`Vente ${m.currency} (${chunk.toLocaleString('fr-FR')} F)`);
+            settledItems.push({
+              targetType: 'currency_sale',
+              id: m.id,
+              reference: m.currency,
+              amountXaf: chunk,
+              detailText: `VENTE DEVISE ${Math.abs(m.amount)} ${m.currency}`,
+            });
           }
         };
         applyCurrencyReceivables(nextCurMovements, 'physical');
@@ -5289,6 +5377,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           remainingToApply -= chunkXaf;
           settledAgainstItems += chunkXaf;
           settledLabels.push(`${s.reference} (${chunkXaf.toLocaleString('fr-FR')} F)`);
+          const pureG = s.totalPureWeight24kGrams || 0;
+          settledItems.push({
+            targetType: 'gold_sale',
+            id: s.id,
+            reference: s.reference,
+            amountXaf: chunkXaf,
+            detailText: [
+              'VENTE OR',
+              pureG > 0 ? `POIDS ${Number.isInteger(pureG) ? pureG : pureG.toFixed(2).replace(/\.?0+$/, '').replace('.', ',')}g 24K` : '',
+              s.reference,
+            ]
+              .filter(Boolean)
+              .join(' '),
+          });
         }
       }
 
@@ -5345,6 +5447,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           remainingToApply -= chunk;
           settledAgainstItems += chunk;
           settledLabels.push(`${l.reference} (${chunk.toLocaleString('fr-FR')} F)`);
+          settledItems.push({
+            targetType: 'loan',
+            id: l.id,
+            reference: l.reference,
+            amountXaf: chunk,
+            detailText: `ENCAISSEMENT PRET ${l.reference}`,
+          });
         }
       }
     }
@@ -5396,6 +5505,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return {
         settledAmountXaf: settledAgainstItems,
         summary: `Compensation de ${settledAgainstItems.toLocaleString('fr-FR')} FCFA imputée sur le solde cash de ${cleanContact} (${settledLabels.join(', ')}).`,
+        reference: compOp.reference || `COMP-${String(nowMs).slice(-6)}`,
+        settledItems,
       };
     }
 
@@ -5445,12 +5556,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdOps.forEach((op) => FirebaseSyncService.saveOperation(op));
     }
 
+    const primaryRef =
+      createdOps.find((o) => o.reference)?.reference ||
+      settledItems[0]?.reference ||
+      `${direction === 'collect_in' ? 'DEP' : 'RET'}-${String(nowMs).slice(-6)}`;
+
     return {
       settledAmountXaf: roundedInput,
       summary:
         settledLabels.length > 0
           ? `${direction === 'collect_in' ? 'Encaissement' : 'Règlement'} de ${roundedInput.toLocaleString('fr-FR')} FCFA via ${accountKey} (${settledLabels.join(', ')}).`
           : `${direction === 'collect_in' ? 'Dépôt' : 'Retrait'} de ${roundedInput.toLocaleString('fr-FR')} FCFA enregistré sur ${accountKey} (${cleanContact}).`,
+      reference: primaryRef,
+      settledItems,
     };
   };
 
