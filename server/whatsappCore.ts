@@ -15,6 +15,7 @@ import {
   appendAuditLog,
   buildAutomationPreview,
   buildAutomationStatePayload,
+  createDefaultData,
   formatFrNumber,
   getBrazzavilleClock,
   getScheduledCategoriesForWeekday,
@@ -1342,7 +1343,7 @@ export const createWhatsAppService = (
     const method = req.method.toUpperCase();
     const pathname = req.pathname.replace(/^\/\.netlify\/functions\/whatsapp-api/, '') || '/';
 
-    if (method === 'GET' && pathname === '/healthz') {
+    if ((method === 'GET' || method === 'HEAD') && pathname === '/healthz') {
       return { status: 200, json: { ok: true } };
     }
 
@@ -2157,6 +2158,12 @@ export const createWhatsAppService = (
       const data = await storage.loadAutomationData();
       data.settings.adminAlertMessage = null;
       const saved = await storage.saveAutomationData(data);
+      return { status: 200, json: buildAutomationStatePayload(saved) };
+    }
+
+    if (method === 'POST' && pathname === '/api/whatsapp/automation/reset') {
+      const saved = await storage.saveAutomationData(createDefaultData());
+      await storage.saveScheduleConfig({ ...DEFAULT_SCHEDULE });
       return { status: 200, json: buildAutomationStatePayload(saved) };
     }
 

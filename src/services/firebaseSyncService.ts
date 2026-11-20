@@ -37,6 +37,8 @@ export const FirebaseSyncService = {
       'stock_movements',
       'sales',
       'tasks',
+      'whatsapp_campaigns',
+      'whatsapp_logs',
     ]) {
       const snapshot = await getDocs(collection(db, collectionName));
       documentRefs.push(...snapshot.docs.map((documentSnapshot) => documentSnapshot.ref));

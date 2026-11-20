@@ -353,4 +353,12 @@ export const WhatsAppDirectService = {
     });
     return parseJsonResponse<WhatsAppAutomationState>(response);
   },
+
+  async resetAutomationData(): Promise<WhatsAppAutomationState> {
+    const response = await fetch('/api/whatsapp/automation/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    return parseJsonResponse<WhatsAppAutomationState>(response);
+  },
 };

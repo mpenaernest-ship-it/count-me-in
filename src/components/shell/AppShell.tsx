@@ -21,10 +21,14 @@ import {
   ShieldCheck,
   UserCheck,
   Lock,
+  KeyRound,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { useAppStore } from '../../context/AppContext';
 import { WhatsAppDirectService } from '../../services/whatsappDirectService';
 import { BrandMark } from '../common/BrandMark';
+import { Modal } from '../common/UIComponents';
 import { HomeScreen } from '../dashboard/HomeScreen';
 import { ModuleHomeScreen } from '../dashboard/ModuleHomeScreen';
 import { CashScreen } from '../cash/CashScreen';
@@ -45,6 +49,14 @@ export const AppShell: React.FC = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState('');
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [currentPwd, setCurrentPwd] = useState('');
+  const [newPwd, setNewPwd] = useState('');
+  const [confirmPwd, setConfirmPwd] = useState('');
+  const [showPwdFields, setShowPwdFields] = useState(false);
+  const [pwdError, setPwdError] = useState<string | null>(null);
+  const [pwdSuccess, setPwdSuccess] = useState<string | null>(null);
+  const [isUpdatingPwd, setIsUpdatingPwd] = useState(false);
 
   useEffect(() => {
     const withPhone = store.contacts
@@ -270,6 +282,22 @@ export const AppShell: React.FC = () => {
                   <span>Gérer Rôles & Tâches</span>
                 </button>
 
+                <button
+                  onClick={() => {
+                    setUserDropdownOpen(false);
+                    setCurrentPwd('');
+                    setNewPwd('');
+                    setConfirmPwd('');
+                    setPwdError(null);
+                    setPwdSuccess(null);
+                    setShowPasswordModal(true);
+                  }}
+                  className="w-full px-4 py-2 text-left hover:bg-amber-50/60 text-[#192A24] font-bold flex items-center gap-2 cursor-pointer"
+                >
+                  <KeyRound size={14} className="text-[#008B62]" />
+                  <span>Changer mot de passe</span>
+                </button>
+
                 {store.currentRole === 'ADMIN' && (
                   <button
                     onClick={async () => {
@@ -447,6 +475,143 @@ export const AppShell: React.FC = () => {
           <span className="mt-0.5">RDV</span>
         </button>
       </nav>
+
+      <Modal
+        isOpen={showPasswordModal}
+        onClose={() => setShowPasswordModal(false)}
+        title="Changer mon mot de passe"
+        maxWidth="max-w-md"
+      >
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setPwdError(null);
+            setPwdSuccess(null);
+            if (newPwd.length < 6) {
+              setPwdError('Le nouveau mot de passe doit comporter au moins 6 caractères.');
+              return;
+            }
+            if (newPwd !== confirmPwd) {
+              setPwdError('La confirmation ne correspond pas au nouveau mot de passe.');
+              return;
+            }
+            setIsUpdatingPwd(true);
+            try {
+              await store.changePassword(currentPwd, newPwd);
+              setPwdSuccess('Votre mot de passe a été modifié avec succès.');
+              setCurrentPwd('');
+              setNewPwd('');
+              setConfirmPwd('');
+              setTimeout(() => {
+                setShowPasswordModal(false);
+              }, 1500);
+            } catch (err) {
+              const code =
+                typeof err === 'object' && err !== null && 'code' in err
+                  ? String((err as { code?: unknown }).code || '')
+                  : '';
+              if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
+                setPwdError('Le mot de passe actuel est incorrect.');
+              } else if (code === 'auth/weak-password') {
+                setPwdError('Le nouveau mot de passe doit comporter au moins 6 caractères.');
+              } else if (code === 'auth/too-many-requests') {
+                setPwdError('Trop de tentatives. Veuillez réessayer plus tard.');
+              } else {
+                setPwdError(
+                  err instanceof Error ? err.message : 'Impossible de modifier le mot de passe.'
+                );
+              }
+            } finally {
+              setIsUpdatingPwd(false);
+            }
+          }}
+          className="space-y-4"
+        >
+          {pwdError && (
+            <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium">
+              {pwdError}
+            </div>
+          )}
+          {pwdSuccess && (
+            <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-700 font-bold">
+              {pwdSuccess}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-bold text-[#192A24] mb-1">
+              Mot de passe actuel *
+            </label>
+            <input
+              type={showPwdFields ? 'text' : 'password'}
+              required
+              value={currentPwd}
+              onChange={(e) => setCurrentPwd(e.target.value)}
+              placeholder="••••••••"
+              className="w-full px-3.5 py-2.5 bg-[#FAF8F3] rounded-xl border border-[#E8D8BE] text-xs font-medium"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-[#192A24] mb-1">
+              Nouveau mot de passe (6 caractères min.) *
+            </label>
+            <input
+              type={showPwdFields ? 'text' : 'password'}
+              required
+              minLength={6}
+              value={newPwd}
+              onChange={(e) => setNewPwd(e.target.value)}
+              placeholder="••••••••"
+              className="w-full px-3.5 py-2.5 bg-[#FAF8F3] rounded-xl border border-[#E8D8BE] text-xs font-medium"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-[#192A24] mb-1">
+              Confirmer le nouveau mot de passe *
+            </label>
+            <input
+              type={showPwdFields ? 'text' : 'password'}
+              required
+              minLength={6}
+              value={confirmPwd}
+              onChange={(e) => setConfirmPwd(e.target.value)}
+              placeholder="••••••••"
+              className="w-full px-3.5 py-2.5 bg-[#FAF8F3] rounded-xl border border-[#E8D8BE] text-xs font-medium"
+            />
+          </div>
+
+          <div className="flex items-center justify-between pt-1">
+            <button
+              type="button"
+              onClick={() => setShowPwdFields((v) => !v)}
+              className="inline-flex items-center gap-1.5 text-xs font-bold text-gray-500 hover:text-[#192A24] cursor-pointer"
+            >
+              {showPwdFields ? <EyeOff size={14} /> : <Eye size={14} />}
+              <span>{showPwdFields ? 'Masquer' : 'Afficher les mots de passe'}</span>
+            </button>
+          </div>
+
+          <div className="pt-2 flex justify-end gap-2">
+            <button
+              type="button"
+              disabled={isUpdatingPwd}
+              onClick={() => setShowPasswordModal(false)}
+              className="px-4 py-2 rounded-xl text-xs font-bold border border-gray-200 cursor-pointer"
+            >
+              Annuler
+            </button>
+            <button
+              type="submit"
+              disabled={isUpdatingPwd}
+              className="px-5 py-2 rounded-xl text-xs font-black bg-[#D39725] hover:bg-[#c2871b] disabled:opacity-60 text-white shadow-md cursor-pointer"
+            >
+              {isUpdatingPwd ? 'Mise à jour...' : 'Enregistrer'}
+            </button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 };

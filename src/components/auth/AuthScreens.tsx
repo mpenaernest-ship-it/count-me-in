@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Mail, Lock, Eye, EyeOff, ArrowRight, UserPlus, RefreshCw, LogOut } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, ArrowRight, ArrowLeft, UserPlus, RefreshCw, LogOut, Copy, Check } from 'lucide-react';
 import { useAppStore } from '../../context/AppContext';
 import { APP_ROLES, AppRole } from '../../types';
+import firebaseConfig from '../../../firebase-applet-config.json';
 
 const getAuthErrorMessage = (error: unknown): string => {
   const code =
@@ -19,6 +20,7 @@ const getAuthErrorMessage = (error: unknown): string => {
     case 'auth/weak-password':
       return 'Le mot de passe doit comporter au moins 6 caractères.';
     case 'auth/invalid-email':
+    case 'auth/missing-email':
       return 'Veuillez saisir une adresse e-mail valide.';
     case 'auth/too-many-requests':
       return 'Trop de tentatives. Réessayez plus tard.';
@@ -32,19 +34,29 @@ const getAuthErrorMessage = (error: unknown): string => {
 };
 
 export const LoginScreen: React.FC<{ onShowRegister: () => void }> = ({ onShowRegister }) => {
-  const { signIn } = useAppStore();
+  const { signIn, sendPasswordReset } = useAppStore();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [isForgotMode, setIsForgotMode] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resetSuccess, setResetSuccess] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setResetSuccess(null);
     setIsSubmitting(true);
     try {
-      await signIn(email, password);
+      if (isForgotMode) {
+        await sendPasswordReset(email);
+        setResetSuccess(
+          `Un lien de réinitialisation a été envoyé à ${email.trim()}. Consultez votre boîte de réception (et vos spams).`
+        );
+      } else {
+        await signIn(email, password);
+      }
     } catch (submitError) {
       setError(getAuthErrorMessage(submitError));
     } finally {
@@ -68,13 +80,21 @@ export const LoginScreen: React.FC<{ onShowRegister: () => void }> = ({ onShowRe
           </div>
           <h1 className="text-2xl font-black text-[#202124] tracking-tight">CAMS GOLD</h1>
           <p className="text-xs text-[#747982] mt-1.5 text-center">
-            Connectez-vous pour accéder à votre espace CAMS GOLD.
+            {isForgotMode
+              ? 'Saisissez votre adresse e-mail pour recevoir un lien de réinitialisation.'
+              : 'Connectez-vous pour accéder à votre espace CAMS GOLD.'}
           </p>
         </div>
 
         {error && (
           <div className="mb-5 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
             {error}
+          </div>
+        )}
+
+        {resetSuccess && (
+          <div className="mb-5 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-700 font-medium">
+            {resetSuccess}
           </div>
         )}
 
@@ -98,40 +118,78 @@ export const LoginScreen: React.FC<{ onShowRegister: () => void }> = ({ onShowRe
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-[#202124] mb-2">
-              Mot de passe
-            </label>
-            <div className="relative">
-              <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[#00BFB5]">
-                <Lock size={18} />
-              </span>
-              <input
-                type={showPassword ? 'text' : 'password'}
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full pl-10 pr-11 py-3 bg-[#F8F9FB] rounded-xl border border-[#E5E8EC] text-sm text-[#202124] placeholder-[#9CA1AA] focus:outline-hidden focus:border-[#00BFB5] focus:ring-1 focus:ring-[#00BFB5] transition-all"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-gray-400 hover:text-gray-600"
-              >
-                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
+          {!isForgotMode && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-xs font-bold text-[#202124]">
+                  Mot de passe
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsForgotMode(true);
+                    setError(null);
+                    setResetSuccess(null);
+                  }}
+                  className="text-xs font-bold text-[#00BFB5] hover:underline cursor-pointer"
+                >
+                  Mot de passe oublié ?
+                </button>
+              </div>
+              <div className="relative">
+                <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[#00BFB5]">
+                  <Lock size={18} />
+                </span>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full pl-10 pr-11 py-3 bg-[#F8F9FB] rounded-xl border border-[#E5E8EC] text-sm text-[#202124] placeholder-[#9CA1AA] focus:outline-hidden focus:border-[#00BFB5] focus:ring-1 focus:ring-[#00BFB5] transition-all"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-gray-400 hover:text-gray-600"
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
             </div>
-          </div>
+          )}
 
           <button
             type="submit"
             disabled={isSubmitting}
-            className="w-full h-12 bg-[#D39725] hover:bg-[#c2871b] text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-sm transition-all transform active:scale-[0.99] cursor-pointer mt-6"
+            className="w-full h-12 bg-[#D39725] hover:bg-[#c2871b] text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-sm transition-all transform active:scale-[0.99] cursor-pointer mt-6 disabled:opacity-60"
           >
-            <span>{isSubmitting ? 'Connexion...' : 'Se connecter'}</span>
+            <span>
+              {isForgotMode
+                ? isSubmitting
+                  ? 'Envoi en cours...'
+                  : 'Envoyer le lien de réinitialisation'
+                : isSubmitting
+                  ? 'Connexion...'
+                  : 'Se connecter'}
+            </span>
             <ArrowRight size={18} />
           </button>
+
+          {isForgotMode && (
+            <button
+              type="button"
+              onClick={() => {
+                setIsForgotMode(false);
+                setError(null);
+                setResetSuccess(null);
+              }}
+              className="w-full py-2 text-xs font-bold text-[#747982] hover:text-[#202124] flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <ArrowLeft size={14} />
+              <span>Retour à la connexion</span>
+            </button>
+          )}
         </form>
 
         <div className="mt-8 pt-6 border-t border-gray-100 flex items-center justify-center gap-2 text-xs">
@@ -324,6 +382,7 @@ export const RegisterScreen: React.FC<{ onShowLogin: () => void }> = ({ onShowLo
 export const AccountStatusScreen: React.FC = () => {
   const {
     authStatus,
+    authUid,
     authEmail,
     authMessage,
     refreshAuthorization,
@@ -332,6 +391,7 @@ export const AccountStatusScreen: React.FC = () => {
   } = useAppStore();
   const [message, setMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [copiedUid, setCopiedUid] = useState(false);
 
   const runAction = async (action: () => Promise<void>, successMessage: string) => {
     setMessage('');
@@ -369,6 +429,44 @@ export const AccountStatusScreen: React.FC = () => {
               ? authMessage
               : `Le compte ${authEmail} doit être activé par un administrateur CAMS GOLD avant d’accéder aux données.`}
         </p>
+        {!isUnverified && (authEmail || authUid) && (
+          <div className="mt-4 p-3 rounded-xl bg-[#F8F9FB] border border-[#E5E8EC] text-left text-xs text-[#202124] space-y-1.5">
+            {authEmail && (
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[#747982]">E-mail :</span>
+                <span className="font-semibold break-all">{authEmail}</span>
+              </div>
+            )}
+            {authUid && (
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[#747982]">UID :</span>
+                <div className="flex items-center gap-1.5">
+                  <code className="font-mono text-[11px] bg-white px-1.5 py-0.5 rounded border border-[#E5E8EC]">
+                    {authUid}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void navigator.clipboard?.writeText(authUid);
+                      setCopiedUid(true);
+                      setTimeout(() => setCopiedUid(false), 2000);
+                    }}
+                    className="p-1 text-[#747982] hover:text-[#202124] cursor-pointer"
+                    title="Copier l'UID"
+                  >
+                    {copiedUid ? <Check size={13} className="text-emerald-600" /> : <Copy size={13} />}
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[#747982]">Base Firestore :</span>
+              <code className="font-mono text-[10px] text-[#5F6368] truncate max-w-[230px]">
+                {firebaseConfig.firestoreDatabaseId}
+              </code>
+            </div>
+          </div>
+        )}
         {message && (
           <div className="mt-4 p-3 rounded-xl bg-[#F8F9FB] border border-[#E5E8EC] text-xs text-[#202124]">
             {message}

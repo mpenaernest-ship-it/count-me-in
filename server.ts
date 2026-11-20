@@ -2,14 +2,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
 import type { Request, Response } from 'express';
-import pino from 'pino';
-import QRCode from 'qrcode';
-import makeWASocket, {
-  Browsers,
-  DisconnectReason,
-  fetchLatestBaileysVersion,
-  useMultiFileAuthState,
-} from '@whiskeysockets/baileys';
 import type { WASocket } from '@whiskeysockets/baileys';
 import {
   loadAutomationData,
@@ -34,7 +26,22 @@ if (fs.existsSync(envFilePath)) {
   process.loadEnvFile(envFilePath);
 }
 
-const PORT = Number(process.env.PORT || 3000);
+const getCliPort = (): number | null => {
+  const args = process.argv.slice(2);
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '--port' && args[i + 1]) {
+      const parsed = Number(args[i + 1]);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    } else if (arg.startsWith('--port=')) {
+      const parsed = Number(arg.slice('--port='.length));
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+  }
+  return null;
+};
+
+const PORT = Number(process.env.PORT || getCliPort() || 3000);
 const IS_PROD = process.env.NODE_ENV === 'production';
 const AUTH_DIR = path.resolve(process.cwd(), '.whatsapp-auth');
 const SCHEDULE_FILE = path.resolve(process.cwd(), '.whatsapp-schedule.json');
@@ -93,6 +100,22 @@ const startBaileysConnection = async (forceResetAuth = false): Promise<void> => 
   sessionState.updatedAt = new Date().toISOString();
 
   try {
+    const [
+      {
+        default: makeWASocket,
+        Browsers,
+        DisconnectReason,
+        fetchLatestBaileysVersion,
+        useMultiFileAuthState,
+      },
+      { default: pino },
+      { default: QRCode },
+    ] = await Promise.all([
+      import('@whiskeysockets/baileys'),
+      import('pino'),
+      import('qrcode'),
+    ]);
+
     fs.mkdirSync(AUTH_DIR, { recursive: true });
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
@@ -387,7 +410,7 @@ async function startServer() {
   } else {
     const viteReady = import('vite').then(({ createServer: createViteServer }) =>
       createViteServer({
-        server: { middlewareMode: true, hmr: false },
+        server: { middlewareMode: true, hmr: false, ws: false },
         appType: 'spa',
       })
     );

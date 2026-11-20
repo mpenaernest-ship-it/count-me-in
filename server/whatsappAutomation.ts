@@ -284,7 +284,7 @@ export interface PersistedAutomationData {
   updatedAt: string;
 }
 
-const createDefaultData = (): PersistedAutomationData => ({
+export const createDefaultData = (): PersistedAutomationData => ({
   settings: { ...DEFAULT_AUTOMATION_SETTINGS },
   categorySchedules: DEFAULT_CATEGORY_SCHEDULES.map((r) => ({ ...r })),
   goldPrices: createDefaultGoldPrices(),

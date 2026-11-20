@@ -1,17 +1,21 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import {
   createUserWithEmailAndPassword,
+  EmailAuthProvider,
   GoogleAuthProvider,
   onAuthStateChanged,
+  reauthenticateWithCredential,
   reload,
   sendEmailVerification,
+  sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signInWithPopup,
   signOut as firebaseSignOut,
+  updatePassword,
   updateProfile,
   User,
 } from 'firebase/auth';
-import { collection, doc, getDoc, getDocs, serverTimestamp, setDoc } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, getDocs, serverTimestamp, setDoc } from 'firebase/firestore';
 import {
   Contact,
   LedgerEntry,
@@ -57,7 +61,8 @@ import {
   TROY_OUNCE_IN_GRAMS,
 } from '../utils/goldMath';
 import { FirebaseSyncService } from '../services/firebaseSyncService';
-import { auth, db } from '../firebase/config';
+import { WhatsAppDirectService } from '../services/whatsappDirectService';
+import { auth, createUserAccountAsAdmin, db } from '../firebase/config';
 import { USD_TO_AED_RATE } from '../utils/currencyRates';
 
 type AuthStatus = 'loading' | 'signedOut' | 'pending' | 'unverified' | 'active' | 'error';
@@ -66,6 +71,29 @@ const isAppRole = (value: unknown): value is AppRole =>
   APP_ROLES.some((role) => role.id === value);
 
 const BOOTSTRAP_ADMIN_EMAIL = 'mohamoudsow45@gmail.com';
+
+const getAuthorizationErrorMessage = (
+  error: unknown,
+  email?: string | null,
+  uid?: string
+): string => {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code || '')
+      : '';
+  const emailLower = (email || '').trim().toLowerCase();
+  if (code === 'permission-denied') {
+    if (emailLower === BOOTSTRAP_ADMIN_EMAIL) {
+      return `Accès refusé par Firestore (permission-denied). Créez le document users/${uid || '<UID>'} (role: "ADMIN", active: true) dans Firestore ou publiez les règles firestore.rules avec ${BOOTSTRAP_ADMIN_EMAIL}.`;
+    }
+    return `Accès refusé par Firestore (permission-denied) sur le profil users/${uid || ''}. Vérifiez les règles Firestore.`;
+  }
+  if (code === 'unavailable' || code === 'deadline-exceeded') {
+    return 'Connexion à Firestore impossible ou trop lente. Vérifiez votre accès Internet puis réessayez.';
+  }
+  const detail = error instanceof Error && error.message ? ` (${code || error.message})` : '';
+  return `Impossible de vérifier vos droits${detail}. Vérifiez votre connexion puis réessayez.`;
+};
 
 const resolveAuthAccess = async (user: User): Promise<{
   status: AuthStatus;
@@ -183,6 +211,7 @@ interface AppContextType {
   userName: string;
   isSignedIn: boolean;
   authStatus: AuthStatus;
+  authUid: string;
   authEmail: string;
   authMessage: string;
   contacts: Contact[];
@@ -221,6 +250,8 @@ interface AppContextType {
   signOut: () => Promise<void>;
   refreshAuthorization: () => Promise<void>;
   resendVerificationEmail: () => Promise<void>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
+  sendPasswordReset: (email: string) => Promise<void>;
   editOperation: (operationId: string, updates: Partial<LedgerEntry>) => void;
   deleteOperation: (operationId: string) => void;
   depositCash: (params: {
@@ -445,9 +476,9 @@ interface AppContextType {
   updateUserPermissions: (userId: string, allowedModules: number[], allowedServices?: string[]) => void;
   canAccessModule: (moduleId: number) => boolean;
   canAccessService: (moduleId: number, serviceId: string) => boolean;
-  addUser: (user: Omit<AppUser, 'id' | 'createdAt'>) => void;
+  addUser: (user: Omit<AppUser, 'id' | 'createdAt'> & { password: string }) => Promise<void>;
   updateUser: (id: string, updates: Partial<AppUser>) => void;
-  deleteUser: (id: string) => void;
+  deleteUser: (id: string) => Promise<void>;
   addTask: (task: Omit<AppTask, 'id' | 'reference' | 'createdAt' | 'status'>) => void;
   updateTaskStatus: (taskId: string, status: TaskStatus, note?: string) => void;
   deleteTask: (taskId: string) => void;
@@ -1075,6 +1106,7 @@ const removeLegacyMarketRates = (config: Partial<PurchaseFormulaConfig>): Partia
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [userName, setUserName] = useState('');
   const [authStatus, setAuthStatus] = useState<AuthStatus>('loading');
+  const [authUid, setAuthUid] = useState('');
   const [authEmail, setAuthEmail] = useState('');
   const [authMessage, setAuthMessage] = useState('');
   const isSignedIn = authStatus === 'active';
@@ -1250,6 +1282,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const checkId = ++activeCheck;
       if (!user) {
         setAuthStatus('signedOut');
+        setAuthUid('');
         setAuthEmail('');
         setAuthMessage('');
         setUserName('');
@@ -1260,6 +1293,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return;
       }
 
+      setAuthUid(user.uid);
       setAuthEmail(user.email || '');
       setAuthMessage('');
       void resolveAuthAccess(user)
@@ -1318,7 +1352,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (checkId !== activeCheck) return;
           console.error('Firebase authorization check failed:', error);
           setAuthStatus('error');
-          setAuthMessage('Impossible de vérifier vos droits. Vérifiez votre connexion puis réessayez.');
+          setAuthMessage(getAuthorizationErrorMessage(error, user.email, user.uid));
         });
     });
 
@@ -1361,9 +1395,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
         if (remoteUsers.length === 0) return;
         setUsers((prev) => {
+          const remoteIds = new Set(remoteUsers.map((u) => u.id));
           const merged = new Map<string, AppUser>();
           for (const localUser of prev) {
-            merged.set(localUser.email ? localUser.email.toLowerCase() : localUser.id, localUser);
+            // Conserver uniquement les utilisateurs créés localement (usr-*) ou encore présents dans Firestore
+            if (localUser.id.startsWith('usr-') || remoteIds.has(localUser.id)) {
+              merged.set(localUser.email ? localUser.email.toLowerCase() : localUser.id, localUser);
+            }
           }
           for (const remoteUser of remoteUsers) {
             const key = remoteUser.email ? remoteUser.email.toLowerCase() : remoteUser.id;
@@ -1760,6 +1798,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const access = await resolveAuthAccess(user);
       setAuthStatus(access.status);
       setUserName(access.name);
+      setAuthUid(user.uid);
       setAuthEmail(user.email || '');
       if (access.role) setCurrentRoleState(access.role);
       setCurrentUserIdState(user.uid);
@@ -1768,7 +1807,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (error) {
       console.error('Firebase authorization refresh failed:', error);
       setAuthStatus('error');
-      setAuthMessage('Impossible de vérifier vos droits. Vérifiez votre connexion puis réessayez.');
+      setAuthMessage(getAuthorizationErrorMessage(error, user.email, user.uid));
       throw error;
     }
   };
@@ -1777,6 +1816,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const user = auth.currentUser;
     if (!user) throw new Error('Aucun compte connecté.');
     await sendEmailVerification(user);
+  };
+
+  const changePassword = async (currentPassword: string, newPassword: string) => {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Aucun compte connecté.');
+    if (!user.email) {
+      throw new Error('Ce compte ne possède pas d’adresse e-mail associée.');
+    }
+    const hasPasswordProvider = user.providerData.some((p) => p.providerId === 'password');
+    if (!hasPasswordProvider) {
+      throw new Error(
+        'Ce compte utilise une connexion Google sans mot de passe local. Gérez le mot de passe depuis votre compte Google.'
+      );
+    }
+    if (!currentPassword) {
+      throw new Error('Veuillez saisir votre mot de passe actuel.');
+    }
+    if (!newPassword || newPassword.length < 6) {
+      throw new Error('Le nouveau mot de passe doit comporter au moins 6 caractères.');
+    }
+    const credential = EmailAuthProvider.credential(user.email, currentPassword);
+    await reauthenticateWithCredential(user, credential);
+    await updatePassword(user, newPassword);
+  };
+
+  const sendPasswordReset = async (email: string) => {
+    const cleanEmail = email.trim();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      throw new Error('Veuillez saisir une adresse e-mail valide.');
+    }
+    auth.languageCode = 'fr';
+    await sendPasswordResetEmail(auth, cleanEmail);
   };
 
   const depositCash = ({
@@ -5573,8 +5644,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const resetToDefaults = async (): Promise<void> => {
-    await FirebaseSyncService.clearBusinessData();
-    setUserName('');
+    await Promise.all([
+      FirebaseSyncService.clearBusinessData(),
+      WhatsAppDirectService.resetAutomationData().catch((err) => {
+        console.warn('WhatsApp backend reset warning:', err);
+      }),
+    ]);
     setContacts([]);
     setBankBalances(EMPTY_BANK_BALANCES);
     setOperations([]);
@@ -5592,9 +5667,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setPartnershipCashMovements([]);
     setLoans([]);
     setPurchaseFormulaConfig(DEFAULT_PURCHASE_FORMULA_CONFIG);
-    setUsers([]);
     setTasks([]);
-    setCurrentUserIdState('');
   };
 
   const updatePurchaseFormulaConfig = (updates: Partial<PurchaseFormulaConfig>) => {
@@ -5691,24 +5764,101 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return services.includes(serviceId);
   };
 
-  const addUser = (userData: Omit<AppUser, 'id' | 'createdAt'>) => {
-    const defaultModules = userData.allowedModules || DEFAULT_ROLE_PERMISSIONS[userData.role] || [0];
-    const defaultServices = userData.allowedServices || getDefaultAllowedServices(defaultModules);
+  const addUser = async (
+    userData: Omit<AppUser, 'id' | 'createdAt'> & { password: string }
+  ): Promise<void> => {
+    const cleanName = userData.name.trim();
+    const cleanEmail = userData.email.trim();
+    const cleanPhone = (userData.phone || '').trim();
+    if (!cleanName || !cleanEmail) {
+      throw new Error('Le nom complet et l’adresse e-mail sont obligatoires.');
+    }
+    if (!userData.password || userData.password.length < 6) {
+      throw new Error('Le mot de passe initial doit comporter au moins 6 caractères.');
+    }
+
+    const defaultModules =
+      userData.allowedModules || DEFAULT_ROLE_PERMISSIONS[userData.role] || [0];
+    const defaultServices =
+      userData.allowedServices || getDefaultAllowedServices(defaultModules);
+
+    const created = await createUserAccountAsAdmin({
+      email: cleanEmail,
+      password: userData.password,
+      displayName: cleanName,
+    });
+
+    await setDoc(doc(db, 'users', created.uid), {
+      name: cleanName,
+      email: created.email,
+      ...(cleanPhone ? { phone: cleanPhone } : {}),
+      role: userData.role,
+      active: userData.status !== 'suspended',
+      allowedModules: defaultModules,
+      allowedServices: defaultServices,
+      createdAt: serverTimestamp(),
+    });
+
     const newUser: AppUser = {
-      ...userData,
-      id: `usr-${Date.now()}`,
+      name: cleanName,
+      email: created.email,
+      ...(cleanPhone ? { phone: cleanPhone } : {}),
+      role: userData.role,
+      roleLabel: userData.roleLabel,
+      status: userData.status,
+      avatarBg: userData.avatarBg,
+      id: created.uid,
       createdAt: new Date().toLocaleDateString('fr-FR'),
       allowedModules: defaultModules,
       allowedServices: defaultServices,
     };
-    setUsers((prev) => [newUser, ...prev]);
+    setUsers((prev) => [newUser, ...prev.filter((u) => u.id !== created.uid)]);
   };
 
   const updateUser = (id: string, updates: Partial<AppUser>) => {
-    setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, ...updates } : u)));
+    const targetUser = users.find((u) => u.id === id);
+    const trimmedName = typeof updates.name === 'string' ? updates.name.trim() : undefined;
+    const normalizedUpdates: Partial<AppUser> = {
+      ...updates,
+      ...(trimmedName !== undefined ? { name: trimmedName } : {}),
+    };
+    setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, ...normalizedUpdates } : u)));
+
+    const isCurrentActiveUser =
+      id === currentUserId ||
+      (targetUser?.email && authEmail && targetUser.email.toLowerCase() === authEmail.toLowerCase());
+    if (isCurrentActiveUser && trimmedName) {
+      setUserName(trimmedName);
+      if (auth.currentUser) {
+        void updateProfile(auth.currentUser, { displayName: trimmedName }).catch((err) => {
+          console.warn('Auth updateProfile fallback:', err);
+        });
+      }
+    }
+
+    if (currentRole === 'ADMIN' && id && !id.startsWith('usr-')) {
+      const firestoreUpdates: Record<string, unknown> = {};
+      if (trimmedName) firestoreUpdates.name = trimmedName;
+      if (updates.role !== undefined) firestoreUpdates.role = updates.role;
+      if (updates.status !== undefined) firestoreUpdates.active = updates.status === 'active';
+      if (updates.phone !== undefined) firestoreUpdates.phone = updates.phone;
+      if (Object.keys(firestoreUpdates).length > 0) {
+        void setDoc(doc(db, 'users', id), firestoreUpdates, { merge: true }).catch((error) => {
+          console.warn('Firestore updateUser fallback to local:', error);
+        });
+      }
+    }
   };
 
-  const deleteUser = (id: string) => {
+  const deleteUser = async (id: string): Promise<void> => {
+    if (!id) return;
+    if (id === currentUserId) {
+      throw new Error('Vous ne pouvez pas supprimer votre propre compte administrateur connecté.');
+    }
+    if (currentRole === 'ADMIN' && !id.startsWith('usr-')) {
+      await deleteDoc(doc(db, 'users', id));
+      await deleteDoc(doc(db, 'pending_users', id)).catch(() => {});
+    }
     setUsers((prev) => prev.filter((u) => u.id !== id));
   };
 
@@ -5754,6 +5904,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         userName,
         isSignedIn,
         authStatus,
+        authUid,
         authEmail,
         authMessage,
         contacts,
@@ -5802,6 +5953,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         signOut,
         refreshAuthorization,
         resendVerificationEmail,
+        changePassword,
+        sendPasswordReset,
         addContact,
         importContacts,
         updateContact,

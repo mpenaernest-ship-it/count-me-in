@@ -37,6 +37,10 @@ import {
   Square,
   UserPlus,
   ArrowLeft,
+  Pencil,
+  X,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { useAppStore } from '../../context/AppContext';
 import { AppPanel, Modal, PageHeading } from '../common/UIComponents';
@@ -226,6 +230,10 @@ export const UsersScreen: React.FC = () => {
     }, 4500);
   };
 
+  const [editingNameUserId, setEditingNameUserId] = useState<string | null>(null);
+  const [editingNameValue, setEditingNameValue] = useState('');
+  const [confirmDeleteUserId, setConfirmDeleteUserId] = useState<string | null>(null);
+
   // Task Filters
   const [roleFilter, setRoleFilter] = useState<AppRole | 'ALL'>('ALL');
   const [statusFilter, setStatusFilter] = useState<TaskStatus | 'ALL'>('ALL');
@@ -251,8 +259,12 @@ export const UsersScreen: React.FC = () => {
   const [newUserName, setNewUserName] = useState('');
   const [newUserEmail, setNewUserEmail] = useState('');
   const [newUserPhone, setNewUserPhone] = useState('');
+  const [newUserPassword, setNewUserPassword] = useState('');
+  const [showNewUserPassword, setShowNewUserPassword] = useState(false);
   const [newUserRole, setNewUserRole] = useState<AppRole>('CASHIER');
   const [newUserStatus, setNewUserStatus] = useState<'active' | 'suspended' | 'vacation'>('active');
+  const [isCreatingUser, setIsCreatingUser] = useState(false);
+  const [createUserError, setCreateUserError] = useState<string | null>(null);
 
   // Handle Create Task
   const handleCreateTask = (e: React.FormEvent) => {
@@ -288,30 +300,68 @@ export const UsersScreen: React.FC = () => {
   };
 
   // Handle Create User
-  const handleCreateUser = (e: React.FormEvent) => {
+  const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newUserName.trim() || !newUserEmail.trim()) return;
+    setCreateUserError(null);
+    if (!newUserName.trim() || !newUserEmail.trim()) {
+      setCreateUserError('Veuillez saisir le nom complet et l’adresse e-mail.');
+      return;
+    }
+    if (!newUserPassword || newUserPassword.length < 6) {
+      setCreateUserError('Le mot de passe initial doit comporter au moins 6 caractères.');
+      return;
+    }
 
     const roleObj = APP_ROLES.find((r) => r.id === newUserRole);
     const defaults = DEFAULT_ROLE_PERMISSIONS[newUserRole] || [0];
 
-    store.addUser({
-      name: newUserName.trim(),
-      email: newUserEmail.trim(),
-      phone: newUserPhone.trim(),
-      role: newUserRole,
-      roleLabel: roleObj ? roleObj.label : newUserRole,
-      status: newUserStatus,
-      avatarBg: roleObj?.color || '#D39725',
-      allowedModules: defaults,
-    });
+    setIsCreatingUser(true);
+    try {
+      await store.addUser({
+        name: newUserName.trim(),
+        email: newUserEmail.trim(),
+        phone: newUserPhone.trim(),
+        password: newUserPassword,
+        role: newUserRole,
+        roleLabel: roleObj ? roleObj.label : newUserRole,
+        status: newUserStatus,
+        avatarBg: roleObj?.color || '#D39725',
+        allowedModules: defaults,
+      });
 
-    setShowAddUserModal(false);
-    setNewUserName('');
-    setNewUserEmail('');
-    setNewUserPhone('');
-    setNewUserRole('CASHIER');
-    setNewUserStatus('active');
+      const createdEmail = newUserEmail.trim();
+      const createdName = newUserName.trim();
+      setShowAddUserModal(false);
+      setNewUserName('');
+      setNewUserEmail('');
+      setNewUserPhone('');
+      setNewUserPassword('');
+      setShowNewUserPassword(false);
+      setNewUserRole('CASHIER');
+      setNewUserStatus('active');
+      setPermissionFeedback(
+        `Compte créé pour ${createdName} (${createdEmail}). Un lien de confirmation a été envoyé à son adresse e-mail.`
+      );
+      setTimeout(() => setPermissionFeedback(null), 6000);
+    } catch (err) {
+      const code =
+        typeof err === 'object' && err !== null && 'code' in err
+          ? String((err as { code?: unknown }).code || '')
+          : '';
+      if (code === 'auth/email-already-in-use') {
+        setCreateUserError('Cette adresse e-mail possède déjà un compte Firebase.');
+      } else if (code === 'auth/invalid-email') {
+        setCreateUserError('Adresse e-mail invalide.');
+      } else if (code === 'auth/weak-password') {
+        setCreateUserError('Le mot de passe doit comporter au moins 6 caractères.');
+      } else {
+        setCreateUserError(
+          err instanceof Error ? err.message : 'Impossible de créer l’utilisateur.'
+        );
+      }
+    } finally {
+      setIsCreatingUser(false);
+    }
   };
 
   // Handle Complete Task
@@ -571,7 +621,59 @@ export const UsersScreen: React.FC = () => {
                 </div>
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-base font-black text-[#192A24]">{selectedUser.name}</h3>
+                    {editingNameUserId === selectedUser.id ? (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          const nextName = editingNameValue.trim();
+                          if (!nextName) return;
+                          store.updateUser(selectedUser.id, { name: nextName });
+                          setEditingNameUserId(null);
+                          setPermissionFeedback(`Nom mis à jour : ${nextName}`);
+                          setTimeout(() => setPermissionFeedback(null), 3500);
+                        }}
+                        className="flex items-center gap-1.5"
+                      >
+                        <input
+                          type="text"
+                          value={editingNameValue}
+                          onChange={(e) => setEditingNameValue(e.target.value)}
+                          placeholder="Nom complet"
+                          autoFocus
+                          className="px-2.5 py-1 text-sm font-bold text-[#192A24] bg-[#FAF8F3] border border-[#D39725] rounded-lg focus:outline-hidden"
+                        />
+                        <button
+                          type="submit"
+                          className="p-1.5 rounded-lg bg-[#008B62] hover:bg-[#007350] text-white cursor-pointer"
+                          title="Enregistrer le nom"
+                        >
+                          <Check size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingNameUserId(null)}
+                          className="p-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 cursor-pointer"
+                          title="Annuler"
+                        >
+                          <X size={14} />
+                        </button>
+                      </form>
+                    ) : (
+                      <>
+                        <h3 className="text-base font-black text-[#192A24]">{selectedUser.name}</h3>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingNameUserId(selectedUser.id);
+                            setEditingNameValue(selectedUser.name);
+                          }}
+                          className="p-1 rounded-lg text-gray-400 hover:text-[#192A24] hover:bg-gray-100 cursor-pointer"
+                          title="Modifier le nom"
+                        >
+                          <Pencil size={13} />
+                        </button>
+                      </>
+                    )}
                     <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300">
                       Rôle : {getRoleInfo(selectedUser.role).label}
                     </span>
@@ -617,6 +719,55 @@ export const UsersScreen: React.FC = () => {
                   <RotateCcw size={13} />
                   <span>Par défaut ({selectedUser.role})</span>
                 </button>
+
+                {selectedUser.id !== store.currentUserId &&
+                  (!store.authEmail ||
+                    selectedUser.email.toLowerCase() !== store.authEmail.toLowerCase()) && (
+                    confirmDeleteUserId === selectedUser.id ? (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const deletedName = selectedUser.name;
+                            try {
+                              await store.deleteUser(selectedUser.id);
+                              setConfirmDeleteUserId(null);
+                              setSelectedUserId(store.currentUserId || '');
+                              setPermissionFeedback(`Compte ${deletedName} supprimé avec succès.`);
+                              setTimeout(() => setPermissionFeedback(null), 3500);
+                            } catch (err) {
+                              setPermissionFeedback(
+                                err instanceof Error
+                                  ? err.message
+                                  : `Impossible de supprimer le compte ${deletedName}.`
+                              );
+                            }
+                          }}
+                          className="px-3 py-1.5 text-xs font-bold rounded-xl bg-red-600 hover:bg-red-700 text-white transition-colors cursor-pointer flex items-center gap-1.5"
+                        >
+                          <Trash2 size={13} />
+                          <span>Confirmer</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteUserId(null)}
+                          className="px-2.5 py-1.5 text-xs font-bold rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600 cursor-pointer"
+                        >
+                          Annuler
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteUserId(selectedUser.id)}
+                        className="px-3 py-1.5 text-xs font-bold rounded-xl bg-white hover:bg-red-50 text-red-600 border border-red-200 transition-colors cursor-pointer flex items-center gap-1.5"
+                        title="Supprimer cet utilisateur de la liste et de Firestore"
+                      >
+                        <Trash2 size={13} />
+                        <span>Supprimer</span>
+                      </button>
+                    )
+                  )}
 
                 <button
                   type="button"
@@ -1017,7 +1168,7 @@ export const UsersScreen: React.FC = () => {
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       {canManageAccess && (
                         <button
                           type="button"
@@ -1032,6 +1183,52 @@ export const UsersScreen: React.FC = () => {
                           <span>Configurer les services</span>
                         </button>
                       )}
+                      {canManageAccess &&
+                        u.id !== store.currentUserId &&
+                        (!store.authEmail ||
+                          u.email.toLowerCase() !== store.authEmail.toLowerCase()) &&
+                        (confirmDeleteUserId === u.id ? (
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await store.deleteUser(u.id);
+                                  setConfirmDeleteUserId(null);
+                                  setPermissionFeedback(`Utilisateur ${u.name} supprimé.`);
+                                  setTimeout(() => setPermissionFeedback(null), 3500);
+                                } catch (err) {
+                                  setPermissionFeedback(
+                                    err instanceof Error
+                                      ? err.message
+                                      : `Impossible de supprimer ${u.name}.`
+                                  );
+                                }
+                              }}
+                              className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs cursor-pointer flex items-center gap-1"
+                            >
+                              <Trash2 size={13} />
+                              <span>Confirmer</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteUserId(null)}
+                              className="px-2.5 py-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold text-xs cursor-pointer"
+                            >
+                              Annuler
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteUserId(u.id)}
+                            className="px-3 py-1.5 rounded-xl bg-white hover:bg-red-50 text-red-600 border border-red-200 font-bold text-xs cursor-pointer flex items-center gap-1"
+                            title="Supprimer cet utilisateur"
+                          >
+                            <Trash2 size={13} />
+                            <span>Supprimer</span>
+                          </button>
+                        ))}
                     </div>
                   </div>
                 );
@@ -1092,11 +1289,20 @@ export const UsersScreen: React.FC = () => {
       {/* MODAL: NOUVEL UTILISATEUR */}
       <Modal
         isOpen={showAddUserModal}
-        onClose={() => setShowAddUserModal(false)}
+        onClose={() => {
+          setShowAddUserModal(false);
+          setCreateUserError(null);
+        }}
         title="Créer un Nouvel Utilisateur"
         maxWidth="max-w-md"
       >
         <form onSubmit={handleCreateUser} className="space-y-4">
+          {createUserError && (
+            <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium">
+              {createUserError}
+            </div>
+          )}
+
           <div>
             <label className="block text-xs font-bold text-[#192A24] mb-1">Nom complet *</label>
             <input
@@ -1133,6 +1339,30 @@ export const UsersScreen: React.FC = () => {
           </div>
 
           <div>
+            <label className="block text-xs font-bold text-[#192A24] mb-1">
+              Mot de passe initial (6 caractères min.) *
+            </label>
+            <div className="relative">
+              <input
+                type={showNewUserPassword ? 'text' : 'password'}
+                required
+                minLength={6}
+                value={newUserPassword}
+                onChange={(e) => setNewUserPassword(e.target.value)}
+                placeholder="Mot de passe de première connexion"
+                className="w-full pl-3 pr-10 py-2 bg-[#FAF8F3] rounded-xl border border-[#E8D8BE] text-xs font-medium"
+              />
+              <button
+                type="button"
+                onClick={() => setShowNewUserPassword((v) => !v)}
+                className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 cursor-pointer"
+              >
+                {showNewUserPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
+            </div>
+          </div>
+
+          <div>
             <label className="block text-xs font-bold text-[#192A24] mb-1">Rôle initial *</label>
             <select
               value={newUserRole}
@@ -1147,19 +1377,28 @@ export const UsersScreen: React.FC = () => {
             </select>
           </div>
 
+          <p className="text-[11px] text-gray-600 bg-[#FAF8F3] border border-[#E8D8BE] rounded-xl p-2.5">
+            Un e-mail de vérification sera envoyé à l’utilisateur. Dès qu’il clique sur le lien reçu, il pourra se connecter avec cet e-mail et ce mot de passe (et le changer depuis son menu).
+          </p>
+
           <div className="pt-2 flex justify-end gap-2">
             <button
               type="button"
-              onClick={() => setShowAddUserModal(false)}
+              disabled={isCreatingUser}
+              onClick={() => {
+                setShowAddUserModal(false);
+                setCreateUserError(null);
+              }}
               className="px-4 py-2 rounded-xl text-xs font-bold border border-gray-200 cursor-pointer"
             >
               Annuler
             </button>
             <button
               type="submit"
-              className="px-5 py-2 rounded-xl text-xs font-black bg-[#D39725] hover:bg-[#c2871b] text-white shadow-md cursor-pointer"
+              disabled={isCreatingUser}
+              className="px-5 py-2 rounded-xl text-xs font-black bg-[#D39725] hover:bg-[#c2871b] disabled:opacity-60 text-white shadow-md cursor-pointer"
             >
-              Créer l'utilisateur
+              {isCreatingUser ? 'Création...' : "Créer l'utilisateur"}
             </button>
           </div>
         </form>

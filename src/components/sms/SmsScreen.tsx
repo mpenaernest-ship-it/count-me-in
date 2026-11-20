@@ -28,6 +28,7 @@ import {
   X,
   ShieldCheck,
   RefreshCw,
+  Trash2,
 } from 'lucide-react';
 import { useAppStore } from '../../context/AppContext';
 import { AppPanel, PageHeading, SectionHeading } from '../common/UIComponents';
@@ -119,6 +120,8 @@ export const SmsScreen: React.FC = () => {
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [runningExceptional, setRunningExceptional] = useState(false);
+  const [confirmResetWhatsApp, setConfirmResetWhatsApp] = useState(false);
+  const [resettingWhatsApp, setResettingWhatsApp] = useState(false);
 
   // --- Envoi manuel rapide (préservé) ---
   const contactsWithPhone = useMemo(
@@ -791,6 +794,68 @@ export const SmsScreen: React.FC = () => {
               )}
               <span>Diffusion exceptionnelle</span>
             </button>
+            {canValidate &&
+              (confirmResetWhatsApp ? (
+                <div className="inline-flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={resettingWhatsApp}
+                    onClick={async () => {
+                      setResettingWhatsApp(true);
+                      try {
+                        const fresh = await WhatsAppDirectService.resetAutomationData();
+                        setAutomationState(fresh);
+                        setSettingsDraft(fresh.settings);
+                        setSchedulesDraft(fresh.categorySchedules);
+                        setSentMessages([]);
+                        setDispatchedRefs({});
+                        setConfirmResetWhatsApp(false);
+                        setSendFeedback({
+                          type: 'success',
+                          message:
+                            'Toutes les données WhatsApp (tarifs, destinataires, campagnes, journaux) ont été réinitialisées.',
+                        });
+                      } catch (err) {
+                        setSendFeedback({
+                          type: 'error',
+                          message:
+                            err instanceof Error
+                              ? err.message
+                              : 'Impossible de réinitialiser les données WhatsApp.',
+                        });
+                      } finally {
+                        setResettingWhatsApp(false);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-xs font-bold cursor-pointer"
+                  >
+                    {resettingWhatsApp ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : (
+                      <Trash2 size={13} />
+                    )}
+                    <span>Confirmer réinitialisation</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={resettingWhatsApp}
+                    onClick={() => setConfirmResetWhatsApp(false)}
+                    className="px-2.5 py-2 rounded-xl bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 text-xs font-bold cursor-pointer"
+                  >
+                    Annuler
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmResetWhatsApp(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white hover:bg-red-50 border border-red-200 text-red-700 text-xs font-bold cursor-pointer"
+                  title="Vider les campagnes, journaux, tarifs et destinataires WhatsApp avant livraison"
+                >
+                  <Trash2 size={13} />
+                  <span>Vider données WhatsApp</span>
+                </button>
+              ))}
           </div>
         }
       />
