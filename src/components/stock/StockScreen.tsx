@@ -16,6 +16,7 @@ import {
   Filter,
   Wallet,
   ShieldCheck,
+  Trash2,
 } from 'lucide-react';
 import { useAppStore } from '../../context/AppContext';
 import { AppPanel, Modal, PageHeading, SectionHeading } from '../common/UIComponents';
@@ -961,6 +962,37 @@ export const StockScreen: React.FC<{
                       {mov.weightGrams >= 0 ? '+' : ''}
                       {formatNumber(mov.weightGrams, 2)} g
                     </span>
+                    {store.currentRole === 'ADMIN' &&
+                      mov.type === 'Correction' &&
+                      !mov.referenceId && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (
+                              !window.confirm(
+                                `Supprimer uniquement la correction « ${mov.reason || mov.label} » ? Le stock sera recalculé.`
+                              )
+                            ) {
+                              return;
+                            }
+                            try {
+                              store.deleteGoldStockAdjustment(mov.id);
+                              setSuccessBanner('Correction de stock supprimée.');
+                            } catch (error: unknown) {
+                              window.alert(
+                                error instanceof Error
+                                  ? error.message
+                                  : 'Impossible de supprimer cette correction de stock.'
+                              );
+                            }
+                          }}
+                          className="ml-3 inline-flex items-center justify-center rounded-lg border border-red-200 bg-red-50 p-1.5 text-red-700 hover:bg-red-100 cursor-pointer"
+                          title="Supprimer cette correction manuelle"
+                          aria-label={`Supprimer la correction ${mov.reason || mov.label}`}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
                   </div>
                 ))}
               </div>

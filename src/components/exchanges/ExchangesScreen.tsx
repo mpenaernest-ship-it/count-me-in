@@ -7,6 +7,7 @@ import {
   AlertCircle,
   TrendingUp,
   Percent,
+  Trash2,
 } from 'lucide-react';
 import { useAppStore } from '../../context/AppContext';
 import { AppPanel, PageHeading, SectionHeading } from '../common/UIComponents';
@@ -102,6 +103,17 @@ export const ExchangesScreen: React.FC = () => {
   const netDelivered = grossDelivered - feesAmount;
 
   const availableDeliveredCurrency = store.currencyBalances[toCurrency] ?? 0;
+  const usedExchangeOperationIds = new Set<string>();
+  const exchangeHistory = store.exchanges.map((description, index) => {
+    const operation = store.operations.find(
+      (item) =>
+        item.title === 'Nouvel échange' &&
+        item.subtitle === description &&
+        !usedExchangeOperationIds.has(item.id)
+    );
+    if (operation) usedExchangeOperationIds.add(operation.id);
+    return { description, index, operation };
+  });
 
   const handleSwapCurrencies = () => {
     handleCurrencyChange(toCurrency, fromCurrency);
@@ -413,13 +425,46 @@ export const ExchangesScreen: React.FC = () => {
               <p className="text-xs text-gray-500 py-6 text-center">Aucun échange enregistré.</p>
             ) : (
               <div className="divide-y divide-gray-100">
-                {store.exchanges.map((ex, idx) => (
-                  <div key={idx} className="py-2.5 text-xs">
-                    <div className="font-bold text-[#192A24]">{ex}</div>
-                    <div className="text-[11px] text-emerald-700 font-semibold flex items-center gap-1 mt-0.5">
-                      <CheckCircle2 size={12} />
-                      <span>Change effectué</span>
+                {exchangeHistory.map(({ description, index, operation }) => (
+                  <div key={`${index}-${description}`} className="py-2.5 flex items-center justify-between gap-3 text-xs">
+                    <div>
+                      <div className="font-bold text-[#192A24]">{description}</div>
+                      <div className="text-[11px] text-emerald-700 font-semibold flex items-center gap-1 mt-0.5">
+                        <CheckCircle2 size={12} />
+                        <span>Change effectué</span>
+                      </div>
                     </div>
+                    {store.currentRole === 'ADMIN' && operation && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (
+                            !window.confirm(
+                              `Supprimer uniquement l’échange « ${description} » et rétablir les stocks de devises associés ?`
+                            )
+                          ) {
+                            return;
+                          }
+                          try {
+                            store.deleteOperation(operation.id);
+                            setSuccessMsg('Échange supprimé et stocks de devises rétablis.');
+                            setErrorMsg(null);
+                          } catch (error: unknown) {
+                            setErrorMsg(
+                              error instanceof Error
+                                ? error.message
+                                : 'Impossible de supprimer cet échange.'
+                            );
+                          }
+                        }}
+                        className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-[11px] font-bold text-red-700 hover:bg-red-100 cursor-pointer"
+                        title="Supprimer cet échange"
+                        aria-label={`Supprimer l’échange ${description}`}
+                      >
+                        <Trash2 size={12} />
+                        <span>Supprimer</span>
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

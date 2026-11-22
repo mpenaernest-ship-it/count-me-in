@@ -27,6 +27,7 @@ import {
   CheckCircle2,
   ChevronRight,
   TrendingUp,
+  Trash2,
 } from 'lucide-react';
 import { useAppStore } from '../../context/AppContext';
 import { AppPanel, Modal, PageHeading } from '../common/UIComponents';
@@ -939,6 +940,38 @@ export const ContactsScreen: React.FC = () => {
                     className="px-3 py-1.5 rounded-lg bg-white border border-[#E8D8BE] hover:border-[#D39725] hover:text-[#D39725] text-[11px] font-bold cursor-pointer"
                   >
                     Modifier les informations
+                  </button>
+                )}
+                {store.currentRole === 'ADMIN' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (
+                        !window.confirm(
+                          `Supprimer uniquement la fiche de ${selectedContact.name} ? Les opérations liées seront conservées et dissociées de ce contact.`
+                        )
+                      ) {
+                        return;
+                      }
+                      try {
+                        store.deleteSourceAccount({
+                          reference: selectedContact.reference,
+                          name: selectedContact.name,
+                          mode: 'detach_only',
+                        });
+                        setSelectedContact(null);
+                      } catch (error: unknown) {
+                        window.alert(
+                          error instanceof Error
+                            ? error.message
+                            : 'Impossible de supprimer cette fiche contact.'
+                        );
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-50 border border-red-200 text-red-700 hover:bg-red-100 text-[11px] font-bold cursor-pointer"
+                  >
+                    <Trash2 size={12} />
+                    Supprimer cette fiche
                   </button>
                 )}
                 <div className="flex flex-wrap gap-1.5 max-w-sm justify-start md:justify-end">

@@ -2,11 +2,9 @@ import {
   collection,
   deleteDoc,
   doc,
-  getDocs,
   setDoc,
   onSnapshot,
   Timestamp,
-  writeBatch,
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { handleFirestoreError, OperationType } from '../firebase/errors';
@@ -26,39 +24,6 @@ import {
 } from '../types';
 
 export const FirebaseSyncService = {
-  async clearBusinessData(): Promise<void> {
-    const documentRefs = [
-      doc(db, 'accounts', 'main_balances'),
-      doc(db, 'accounts', 'currency_state'),
-      doc(db, 'settings', 'purchase_formula'),
-    ];
-    for (const collectionName of [
-      'contacts',
-      'operations',
-      'purchases',
-      'stock_movements',
-      'sales',
-      'tasks',
-      'whatsapp_campaigns',
-      'whatsapp_logs',
-      'employees',
-      'salary_payments',
-    ]) {
-      try {
-        const snapshot = await getDocs(collection(db, collectionName));
-        documentRefs.push(...snapshot.docs.map((documentSnapshot) => documentSnapshot.ref));
-      } catch (err) {
-        console.warn(`clearBusinessData skipped ${collectionName}:`, err);
-      }
-    }
-
-    for (let index = 0; index < documentRefs.length; index += 500) {
-      const batch = writeBatch(db);
-      documentRefs.slice(index, index + 500).forEach((documentRef) => batch.delete(documentRef));
-      await batch.commit();
-    }
-  },
-
   // Save entire purchase
   async savePurchase(purchase: PurchaseRecord): Promise<void> {
     try {
@@ -89,6 +54,15 @@ export const FirebaseSyncService = {
       });
     } catch (error) {
       console.warn('Firebase saveStockMovement fallback to local:', error);
+    }
+  },
+
+  async deleteStockMovement(movementId: string): Promise<void> {
+    try {
+      if (!movementId) return;
+      await deleteDoc(doc(db, 'stock_movements', movementId));
+    } catch (error) {
+      console.warn('Firebase deleteStockMovement error:', error);
     }
   },
 

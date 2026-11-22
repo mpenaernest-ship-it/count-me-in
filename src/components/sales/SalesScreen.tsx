@@ -3980,6 +3980,35 @@ export const SalesScreen: React.FC<{ onExit?: () => void }> = ({ onExit }) => {
                             <Eye size={12} />
                             <span>Bordereau</span>
                           </button>
+                          {store.currentRole === 'ADMIN' && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (
+                                  !window.confirm(
+                                    `Supprimer uniquement la vente ${sale.reference} ? Les mouvements liés de stock et de règlement seront annulés.`
+                                  )
+                                ) {
+                                  return;
+                                }
+                                try {
+                                  store.deleteSaleRecord(sale.id);
+                                } catch (error: unknown) {
+                                  window.alert(
+                                    error instanceof Error
+                                      ? error.message
+                                      : 'Impossible de supprimer cette vente.'
+                                  );
+                                }
+                              }}
+                              className="px-2.5 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-[11px] font-bold cursor-pointer inline-flex items-center gap-1"
+                              title={`Supprimer la vente ${sale.reference}`}
+                              aria-label={`Supprimer la vente ${sale.reference}`}
+                            >
+                              <Trash2 size={12} />
+                              <span>Supprimer</span>
+                            </button>
+                          )}
                         </td>
                       </tr>
                       );

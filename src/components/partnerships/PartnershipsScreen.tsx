@@ -15,11 +15,13 @@ import {
   Printer,
   Copy,
   Check,
+  Pencil,
   TrendingUp,
   ArrowLeftRight,
   ArrowDownLeft,
   ArrowUpRight,
   Building2,
+  Trash2,
 } from 'lucide-react';
 import { useAppStore } from '../../context/AppContext';
 import { AppPanel, Modal, PageHeading, SectionHeading } from '../common/UIComponents';
@@ -100,6 +102,7 @@ export const PartnershipsScreen: React.FC = () => {
 
   // New Partner Modal
   const [showNewPartnerModal, setShowNewPartnerModal] = useState(false);
+  const [editingPartner, setEditingPartner] = useState<Partner | null>(null);
   const [partnerName, setPartnerName] = useState('');
   const [partnerPhone, setPartnerPhone] = useState('');
   const [partnerCity, setPartnerCity] = useState('');
@@ -742,20 +745,68 @@ export const PartnershipsScreen: React.FC = () => {
   const handleCreatePartner = (e: React.FormEvent) => {
     e.preventDefault();
     if (!partnerName.trim()) return;
-    const created = store.addPartner({
-      name: partnerName,
-      phone: partnerPhone,
-      city: partnerCity,
-      email: '',
-      isActive: true,
-      type: partnerType,
-    });
-    setSelectedCashPartnerId(created.id);
-    setSelectedPartnerId(created.id);
-    setShowNewPartnerModal(false);
+    try {
+      const saved = editingPartner
+        ? store.updatePartner(editingPartner.id, {
+            name: partnerName,
+            phone: partnerPhone,
+            city: partnerCity,
+            type: partnerType,
+          })
+        : store.addPartner({
+            name: partnerName.trim(),
+            phone: partnerPhone.trim(),
+            city: partnerCity.trim(),
+            email: '',
+            isActive: true,
+            type: partnerType,
+          });
+      setSelectedCashPartnerId(saved.id);
+      setSelectedPartnerId(saved.id);
+      setShowNewPartnerModal(false);
+      setEditingPartner(null);
+      setPartnerName('');
+      setPartnerPhone('');
+      setPartnerCity('');
+      showToast(editingPartner ? 'Fiche partenaire modifiée.' : 'Partenaire ajouté.');
+    } catch (error: unknown) {
+      showToast(error instanceof Error ? error.message : 'Impossible d’enregistrer le partenaire.');
+    }
+  };
+
+  const openNewPartnerModal = () => {
+    setEditingPartner(null);
     setPartnerName('');
     setPartnerPhone('');
     setPartnerCity('');
+    setPartnerType('Investisseur');
+    setShowNewPartnerModal(true);
+  };
+
+  const openEditPartnerModal = (partner: Partner) => {
+    setEditingPartner(partner);
+    setPartnerName(partner.name);
+    setPartnerPhone(partner.phone);
+    setPartnerCity(partner.city);
+    setPartnerType(partner.type);
+    setShowNewPartnerModal(true);
+  };
+
+  const closePartnerModal = () => {
+    setShowNewPartnerModal(false);
+    setEditingPartner(null);
+  };
+
+  const handleDeletePartner = (partner: Partner) => {
+    if (!window.confirm(`Supprimer uniquement la fiche partenaire « ${partner.name} » ?`)) {
+      return;
+    }
+    try {
+      store.deletePartner(partner.id);
+      showToast(`Fiche partenaire « ${partner.name} » supprimée.`);
+    } catch (error: unknown) {
+      showToast(error instanceof Error ? error.message : 'Impossible de supprimer cette fiche partenaire.');
+    }
   };
 
   const handleCopyText = async (id: string, text: string) => {
@@ -1065,7 +1116,7 @@ export const PartnershipsScreen: React.FC = () => {
               {canDirectory && (
                 <button
                   type="button"
-                  onClick={() => setShowNewPartnerModal(true)}
+                  onClick={openNewPartnerModal}
                   className="self-start md:self-auto flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#008B62] hover:bg-[#007452] text-white text-xs font-bold cursor-pointer shrink-0"
                 >
                   <Plus size={14} />
@@ -1126,39 +1177,60 @@ export const PartnershipsScreen: React.FC = () => {
                   const stats = getPartnerCashStats(partner);
                   const isSelected = selectedCashPartner?.id === partner.id;
                   return (
-                    <button
-                      key={partner.id}
-                      type="button"
-                      onClick={() => setSelectedCashPartnerId(partner.id)}
-                      className={`text-left p-3.5 rounded-xl border transition-all cursor-pointer ${
-                        isSelected
-                          ? 'bg-[#FFF7E2] border-[#D39725] ring-2 ring-[#D39725]/30 shadow-xs'
-                          : 'bg-[#FAF8F3] border-[#E8D8BE] hover:border-[#D39725]/60'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-black text-xs text-[#192A24] truncate">{partner.name}</span>
-                        <span className="px-2 py-0.5 rounded-full bg-white border border-[#E8D8BE] text-[10px] font-bold text-[#7D8176] shrink-0">
-                          {partner.type}
-                        </span>
-                      </div>
-                      <div className="mt-2 flex items-baseline justify-between text-[11px]">
-                        <span className="text-[#7D8176]">Solde caisse :</span>
-                        <span className={`font-black ${stats.balance >= 0 ? 'text-emerald-800' : 'text-red-700'}`}>
-                          {formatMoney(stats.balance)} FCFA
-                        </span>
-                      </div>
-                      <div className="mt-1 flex items-center justify-between text-[10px] text-[#7D8176]">
-                        <span>CAMS : {formatMoney(Math.max(stats.camsGoldContrib, stats.contractCompanyInvested))} F</span>
-                        <span>Part. : {formatMoney(Math.max(stats.partnerContrib, stats.contractPartnerInvested))} F</span>
-                      </div>
-                      <div className="mt-1 flex items-center justify-between text-[10px] font-bold">
-                        <span className="text-orange-700">Dép. : {formatMoney(stats.expensesTotal)} F</span>
-                        <span className={stats.benefitTotal >= 0 ? 'text-emerald-700' : 'text-red-700'}>
-                          Bén. : {stats.benefitTotal >= 0 ? '+' : ''}{formatMoney(stats.benefitTotal)} F
-                        </span>
-                      </div>
-                    </button>
+                    <div key={partner.id} className="space-y-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCashPartnerId(partner.id)}
+                        className={`w-full text-left p-3.5 rounded-xl border transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-[#FFF7E2] border-[#D39725] ring-2 ring-[#D39725]/30 shadow-xs'
+                            : 'bg-[#FAF8F3] border-[#E8D8BE] hover:border-[#D39725]/60'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-black text-xs text-[#192A24] truncate">{partner.name}</span>
+                          <span className="px-2 py-0.5 rounded-full bg-white border border-[#E8D8BE] text-[10px] font-bold text-[#7D8176] shrink-0">
+                            {partner.type}
+                          </span>
+                        </div>
+                        <div className="mt-2 flex items-baseline justify-between text-[11px]">
+                          <span className="text-[#7D8176]">Solde caisse :</span>
+                          <span className={`font-black ${stats.balance >= 0 ? 'text-emerald-800' : 'text-red-700'}`}>
+                            {formatMoney(stats.balance)} FCFA
+                          </span>
+                        </div>
+                        <div className="mt-1 flex items-center justify-between text-[10px] text-[#7D8176]">
+                          <span>CAMS : {formatMoney(Math.max(stats.camsGoldContrib, stats.contractCompanyInvested))} F</span>
+                          <span>Part. : {formatMoney(Math.max(stats.partnerContrib, stats.contractPartnerInvested))} F</span>
+                        </div>
+                        <div className="mt-1 flex items-center justify-between text-[10px] font-bold">
+                          <span className="text-orange-700">Dép. : {formatMoney(stats.expensesTotal)} F</span>
+                          <span className={stats.benefitTotal >= 0 ? 'text-emerald-700' : 'text-red-700'}>
+                            Bén. : {stats.benefitTotal >= 0 ? '+' : ''}{formatMoney(stats.benefitTotal)} F
+                          </span>
+                        </div>
+                      </button>
+                      {store.currentRole === 'ADMIN' && (
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => openEditPartnerModal(partner)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-[#E8D8BE] bg-white text-[#192A24] hover:bg-amber-50 text-[11px] font-bold cursor-pointer"
+                          >
+                            <Pencil size={12} />
+                            Modifier
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePartner(partner)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 text-[11px] font-bold cursor-pointer"
+                          >
+                            <Trash2 size={12} />
+                            Supprimer
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   );
                 })}
               </div>
@@ -1581,6 +1653,38 @@ export const PartnershipsScreen: React.FC = () => {
                                     >
                                       <Share2 size={11} />
                                     </button>
+                                    {store.currentRole === 'ADMIN' && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (
+                                            !window.confirm(
+                                              `Supprimer uniquement l’opération ${refCode} de la caisse de ${selectedCashPartner.name} ?`
+                                            )
+                                          ) {
+                                            return;
+                                          }
+                                          try {
+                                            store.deletePartnershipCashMovement(movement.id);
+                                            if (viewingMovement?.movement.id === movement.id) {
+                                              setViewingMovement(null);
+                                            }
+                                            showToast(`Opération ${refCode} supprimée.`);
+                                          } catch (error: unknown) {
+                                            showToast(
+                                              error instanceof Error
+                                                ? error.message
+                                                : 'Impossible de supprimer cette opération.'
+                                            );
+                                          }
+                                        }}
+                                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-[10px] font-bold cursor-pointer"
+                                        title={`Supprimer l’opération ${refCode}`}
+                                        aria-label={`Supprimer l’opération ${refCode}`}
+                                      >
+                                        <Trash2 size={11} />
+                                      </button>
+                                    )}
                                   </div>
                                 </td>
                               </tr>
@@ -1667,6 +1771,35 @@ export const PartnershipsScreen: React.FC = () => {
                         <Download size={13} />
                         <span>PDF</span>
                       </button>
+                      {store.currentRole === 'ADMIN' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (
+                              !window.confirm(
+                                `Supprimer uniquement le contrat ${p.reference} ? Les opérations de caisse liées seront conservées.`
+                              )
+                            ) {
+                              return;
+                            }
+                            try {
+                              store.deletePartnership(p.id);
+                              showToast(`Contrat ${p.reference} supprimé.`);
+                            } catch (error: unknown) {
+                              showToast(
+                                error instanceof Error
+                                  ? error.message
+                                  : 'Impossible de supprimer ce contrat.'
+                              );
+                            }
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-xs font-bold cursor-pointer"
+                          aria-label={`Supprimer le contrat ${p.reference}`}
+                        >
+                          <Trash2 size={13} />
+                          <span>Supprimer</span>
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -1823,6 +1956,35 @@ export const PartnershipsScreen: React.FC = () => {
                           </span>
                         )
                       )}
+                      {store.currentRole === 'ADMIN' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (
+                              !window.confirm(
+                                `Supprimer uniquement le prêt ${loan.reference} et son historique de règlements ? Les opérations de caisse resteront dans le journal.`
+                              )
+                            ) {
+                              return;
+                            }
+                            try {
+                              store.deleteLoan(loan.id);
+                              showToast(`Prêt ${loan.reference} supprimé.`);
+                            } catch (error: unknown) {
+                              showToast(
+                                error instanceof Error
+                                  ? error.message
+                                  : 'Impossible de supprimer ce prêt.'
+                              );
+                            }
+                          }}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-xs font-bold cursor-pointer whitespace-nowrap"
+                          aria-label={`Supprimer le prêt ${loan.reference}`}
+                        >
+                          <Trash2 size={13} />
+                          Supprimer
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -1859,7 +2021,7 @@ export const PartnershipsScreen: React.FC = () => {
           <div className="flex justify-end">
             <button
               type="button"
-              onClick={() => setShowNewPartnerModal(true)}
+              onClick={openNewPartnerModal}
               className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#008B62] hover:bg-[#007452] text-white text-xs font-bold cursor-pointer"
             >
               <Plus size={15} />
@@ -1912,6 +2074,26 @@ export const PartnershipsScreen: React.FC = () => {
                       </button>
                     )}
                   </div>
+                  {store.currentRole === 'ADMIN' && (
+                    <div className="flex justify-end gap-2 pt-2 border-t border-[#E8D8BE]/60">
+                      <button
+                        type="button"
+                        onClick={() => openEditPartnerModal(p)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-[#E8D8BE] bg-white text-[#192A24] hover:bg-amber-50 text-[11px] font-bold cursor-pointer"
+                      >
+                        <Pencil size={12} />
+                        Modifier
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeletePartner(p)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 text-[11px] font-bold cursor-pointer"
+                      >
+                        <Trash2 size={12} />
+                        Supprimer
+                      </button>
+                    </div>
+                  )}
                 </AppPanel>
               );
             })}
@@ -3230,8 +3412,8 @@ export const PartnershipsScreen: React.FC = () => {
       {/* Modal Add Partner */}
       <Modal
         isOpen={showNewPartnerModal}
-        onClose={() => setShowNewPartnerModal(false)}
-        title="Nouveau partenaire"
+        onClose={closePartnerModal}
+        title={editingPartner ? `Modifier le partenaire · ${editingPartner.name}` : 'Nouveau partenaire'}
         maxWidth="max-w-md"
       >
         <form onSubmit={handleCreatePartner} className="space-y-4">
@@ -3286,13 +3468,13 @@ export const PartnershipsScreen: React.FC = () => {
           <div className="pt-2 flex justify-end gap-2">
             <button
               type="button"
-              onClick={() => setShowNewPartnerModal(false)}
+              onClick={closePartnerModal}
               className="px-4 py-2 rounded-xl text-xs font-bold border border-gray-200 cursor-pointer"
             >
               Annuler
             </button>
             <button type="submit" className="px-5 py-2 rounded-xl text-xs font-bold bg-[#008B62] text-white cursor-pointer">
-              Enregistrer
+              {editingPartner ? 'Enregistrer les modifications' : 'Enregistrer'}
             </button>
           </div>
         </form>

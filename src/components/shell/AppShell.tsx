@@ -303,34 +303,6 @@ export const AppShell: React.FC = () => {
                   <span>Changer mot de passe</span>
                 </button>
 
-                {store.currentRole === 'ADMIN' && (
-                  <button
-                    onClick={async () => {
-                      setUserDropdownOpen(false);
-                      if (
-                        !window.confirm(
-                          'Cette action supprime les achats, ventes, devises, comptes et contacts dans Firebase ainsi que les données locales. Les comptes utilisateurs ne seront pas supprimés. Continuer ?'
-                        )
-                      ) {
-                        return;
-                      }
-
-                      try {
-                        await store.resetToDefaults();
-                        window.alert('Les données de l’application ont été effacées.');
-                      } catch (error) {
-                        console.error('Could not clear application business data:', error);
-                        window.alert(
-                          'Échec de la suppression. Vérifiez votre connexion et vos droits Firebase, puis réessayez.'
-                        );
-                      }
-                    }}
-                    className="w-full px-4 py-2 text-left hover:bg-gray-50 text-red-700 flex items-center gap-2 cursor-pointer"
-                  >
-                    <span>Effacer toutes les données</span>
-                  </button>
-                )}
-
                 <button
                   onClick={() => {
                     setUserDropdownOpen(false);

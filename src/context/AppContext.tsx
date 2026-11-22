@@ -375,6 +375,7 @@ interface AppContextType {
     weightGrams: number;
     reason: string;
   }) => void;
+  deleteGoldStockAdjustment: (movementId: string) => void;
   reconcileGoldStockWithUnsoldPurchases: () => number;
   addSale: (params: {
     description: string;
@@ -387,6 +388,7 @@ interface AppContextType {
     targetAccount?: string;
   }) => void;
   addSaleRecord: (sale: Omit<SaleRecord, 'id' | 'reference' | 'createdAt'>) => SaleRecord;
+  deleteSaleRecord: (saleId: string) => void;
   updateSaleRecordBars: (saleId: string, bars: SaleBarItem[]) => SaleRecord;
   updateSaleFixings: (saleId: string, fixings: SaleFixingItem[]) => SaleRecord;
   updateSalePurchaseCost: (saleId: string, purchaseCostXaf?: number) => SaleRecord;
@@ -459,16 +461,20 @@ interface AppContextType {
     paidAt?: string;
   }) => CurrencyStockMovement;
   addPartner: (partner: Omit<Partner, 'id' | 'createdAt'>) => Partner;
+  updatePartner: (partnerId: string, updates: Partial<Omit<Partner, 'id' | 'createdAt'>>) => Partner;
+  deletePartner: (partnerId: string) => void;
   addPartnership: (partnership: Omit<Partnership, 'id' | 'reference' | 'createdAt'>) => Partnership;
   addPartnershipCashMovement: (
     movement: Omit<PartnershipCashMovement, 'id' | 'createdAt' | 'createdBy'>
   ) => PartnershipCashMovement;
+  deletePartnershipCashMovement: (movementId: string) => void;
+  deletePartnership: (partnershipId: string) => void;
   updatePartnershipStatus: (id: string, status: PartnershipStatus) => void;
   addLoan: (loan: Omit<PartnershipLoan, 'id' | 'reference' | 'createdAt' | 'repayments'>) => void;
+  deleteLoan: (loanId: string) => void;
   addLoanRepayment: (loanId: string, repayment: Omit<PartnershipRepayment, 'paidAt'>) => void;
   updatePurchaseFormulaConfig: (config: Partial<PurchaseFormulaConfig>) => void;
   resetPurchaseFormulaConfig: () => void;
-  resetToDefaults: () => Promise<void>;
 
   // Module Utilisateurs, Rôles & Tâches
   users: AppUser[];
@@ -2125,6 +2131,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       FirebaseSyncService.saveBankBalances(nextBalances);
     }
 
+    if (op.title === 'Nouvel échange') {
+      let exchangeMovements = op.reference
+        ? currencyStockMovements.filter((movement) => movement.referenceId === op.reference)
+        : [];
+      if (!op.reference) {
+        const receivedMovement = currencyStockMovements.find(
+          (movement) => movement.type === 'Change reçu' && movement.label === op.subtitle
+        );
+        const deliveredMovement = currencyStockMovements.find(
+          (movement) => movement.type === 'Change remis' && movement.label === op.subtitle
+        );
+        if (receivedMovement && deliveredMovement) {
+          exchangeMovements = [receivedMovement, deliveredMovement];
+        }
+      }
+      if (exchangeMovements.length > 0) {
+        const nextCurrencyBalances = { ...currencyBalances };
+        exchangeMovements.forEach((movement) => {
+          nextCurrencyBalances[movement.currency] =
+            (nextCurrencyBalances[movement.currency] ?? 0) - movement.amount;
+        });
+        const exchangeMovementIds = new Set(exchangeMovements.map((movement) => movement.id));
+        const nextCurrencyMovements = currencyStockMovements.filter(
+          (movement) => !exchangeMovementIds.has(movement.id)
+        );
+        setCurrencyBalances(nextCurrencyBalances);
+        setCurrencyStockMovements(nextCurrencyMovements);
+        void FirebaseSyncService.saveCurrencyState({
+          currencyBalances: nextCurrencyBalances,
+          currencyStockMovements: nextCurrencyMovements,
+        });
+      }
+      setExchanges((previous) => {
+        const exchangeIndex = previous.indexOf(op.subtitle);
+        if (exchangeIndex < 0) return previous;
+        return previous.filter((_, index) => index !== exchangeIndex);
+      });
+    }
+
     setOperations((prev) => prev.filter((o) => o.id !== operationId));
     FirebaseSyncService.deleteOperation(operationId);
   };
@@ -3501,6 +3546,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     FirebaseSyncService.saveStockMovement(movement);
   };
 
+  const deleteGoldStockAdjustment = (movementId: string) => {
+    if (currentRole !== 'ADMIN') {
+      throw new Error('Seul un administrateur peut supprimer une correction de stock.');
+    }
+    const movement = stockMovements.find((item) => item.id === movementId);
+    if (!movement) {
+      throw new Error('Correction de stock introuvable.');
+    }
+    if (movement.type !== 'Correction' || movement.referenceId) {
+      throw new Error('Seules les corrections manuelles sans opération liée peuvent être supprimées ici.');
+    }
+
+    setStockMovements((previous) => previous.filter((item) => item.id !== movementId));
+    void FirebaseSyncService.deleteStockMovement(movementId);
+  };
+
   const buildGoldStockReconciliationMovements = (
     currentMovements: GoldStockMovement[],
     targetPurchases: PurchaseRecord[],
@@ -3908,6 +3969,84 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return newRecord;
   };
 
+  const deleteSaleRecord = (saleId: string) => {
+    if (currentRole !== 'ADMIN') {
+      throw new Error('Seul un administrateur peut supprimer une vente enregistrée.');
+    }
+    const sale = saleRecords.find((record) => record.id === saleId);
+    if (!sale) {
+      throw new Error('Vente introuvable.');
+    }
+
+    const linkedOperations = operations.filter((operation) => operation.reference === sale.reference);
+    if (linkedOperations.length > 0) {
+      const cashKey =
+        Object.keys(bankBalances).find((key) => key.toLowerCase().includes('caisse')) ||
+        'Caisse (espèces)';
+      const nextBalances = { ...bankBalances };
+      linkedOperations.forEach((operation) => {
+        reverseOperationBalanceImpact(operation, nextBalances, cashKey);
+        void FirebaseSyncService.deleteOperation(operation.id);
+      });
+      setBankBalances(nextBalances);
+      void FirebaseSyncService.saveBankBalances(nextBalances);
+      const linkedOperationIds = new Set(linkedOperations.map((operation) => operation.id));
+      setOperations((previous) => previous.filter((operation) => !linkedOperationIds.has(operation.id)));
+    }
+
+    const linkedStockMovements = stockMovements.filter(
+      (movement) => movement.referenceId === sale.reference
+    );
+    if (linkedStockMovements.length > 0) {
+      const linkedMovementIds = new Set(linkedStockMovements.map((movement) => movement.id));
+      setStockMovements((previous) =>
+        previous.filter((movement) => !linkedMovementIds.has(movement.id))
+      );
+      linkedMovementIds.forEach((movementId) => {
+        void FirebaseSyncService.deleteStockMovement(movementId);
+      });
+    }
+
+    const linkedGoldCurrencyMovements = goldCurrencyMovements.filter(
+      (movement) =>
+        movement.referenceId === sale.reference && movement.type === 'Encaissement vente or'
+    );
+    if (linkedGoldCurrencyMovements.length > 0) {
+      const nextBalances = { ...goldCurrencyBalances };
+      linkedGoldCurrencyMovements.forEach((movement) => {
+        nextBalances[movement.currency] =
+          (nextBalances[movement.currency] ?? 0) - movement.amount;
+      });
+      const linkedMovementIds = new Set(linkedGoldCurrencyMovements.map((movement) => movement.id));
+      const nextMovements = goldCurrencyMovements.filter(
+        (movement) => !linkedMovementIds.has(movement.id)
+      );
+      setGoldCurrencyBalances(nextBalances);
+      setGoldCurrencyMovements(nextMovements);
+      void FirebaseSyncService.saveCurrencyState({
+        goldCurrencyBalances: nextBalances,
+        goldCurrencyMovements: nextMovements,
+      });
+    }
+
+    const nextPurchases = purchases.map((purchase) => {
+      if (purchase.saleReference !== sale.reference) return purchase;
+      const unsoldPurchase: PurchaseRecord = {
+        ...purchase,
+        soldAt: undefined,
+        saleReference: undefined,
+      };
+      void FirebaseSyncService.savePurchase(unsoldPurchase);
+      return unsoldPurchase;
+    });
+    setPurchases(nextPurchases);
+    setSaleRecords((previous) => previous.filter((record) => record.id !== saleId));
+
+    const saleSummary = `${sale.clientName} · ${sale.totalGeneralWeightGrams.toFixed(1)} g brut (${sale.totalPureOunces.toFixed(2)} oz pur 24K) · Brut $${sale.grossRevenueUsd.toFixed(2)}`;
+    setSales((previous) => previous.filter((summary) => summary !== saleSummary));
+    void FirebaseSyncService.deleteSaleRecord(saleId);
+  };
+
   const updateSaleRecordBars = (saleId: string, bars: SaleBarItem[]): SaleRecord => {
     const sale = saleRecords.find((record) => record.id === saleId);
     if (!sale) throw new Error('Bordereau introuvable.');
@@ -4204,13 +4343,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     deliveredCurrency?: string;
     deliveredAmount?: number;
   }) => {
+    const now = new Date().toISOString();
+    const exchangeReference = `exchange-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     if (receivedCurrency && deliveredCurrency && receivedAmount && deliveredAmount) {
       if (receivedCurrency === deliveredCurrency) {
         throw new Error('Les devises reçues et remises doivent être différentes.');
       }
       const available = currencyBalances[deliveredCurrency] ?? 0;
 
-      const now = new Date().toISOString();
       const nextCurBalances = {
         ...currencyBalances,
         [receivedCurrency]: (currencyBalances[receivedCurrency] ?? 0) + receivedAmount,
@@ -4220,20 +4360,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const movements: CurrencyStockMovement[] = [
         {
-          id: `cur-mov-${Date.now()}-1`,
+          id: `cur-mov-${exchangeReference}-1`,
           currency: receivedCurrency,
           amount: receivedAmount,
           type: 'Change reçu',
           label: description,
           date: now,
+          referenceId: exchangeReference,
         },
         {
-          id: `cur-mov-${Date.now()}-2`,
+          id: `cur-mov-${exchangeReference}-2`,
           currency: deliveredCurrency,
           amount: -deliveredAmount,
           type: 'Change remis',
           label: description,
           date: now,
+          referenceId: exchangeReference,
         },
       ];
       const nextCurMovements = [...movements, ...currencyStockMovements];
@@ -4247,11 +4389,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setExchanges([description, ...exchanges]);
 
     const newOp: LedgerEntry = {
-      id: `op-${Date.now()}`,
+      id: `op-${exchangeReference}`,
       title: 'Nouvel échange',
       subtitle: description,
       amount: 0,
       date: 'Aujourd’hui',
+      createdAt: now,
+      reference: exchangeReference,
       isIncome: true,
       isProcessed: true,
     };
@@ -4841,6 +4985,71 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return newPartner;
   };
 
+  const updatePartner = (
+    partnerId: string,
+    updates: Partial<Omit<Partner, 'id' | 'createdAt'>>
+  ): Partner => {
+    if (currentRole !== 'ADMIN') {
+      throw new Error('Seul un administrateur peut modifier une fiche partenaire.');
+    }
+    const existing = partners.find((partner) => partner.id === partnerId);
+    if (!existing) {
+      throw new Error('Partenaire introuvable.');
+    }
+    if (updates.name !== undefined && !updates.name.trim()) {
+      throw new Error('Le nom du partenaire est obligatoire.');
+    }
+
+    const updatedPartner: Partner = {
+      ...existing,
+      ...updates,
+      name: updates.name?.trim() ?? existing.name,
+      phone: updates.phone?.trim() ?? existing.phone,
+      city: updates.city?.trim() ?? existing.city,
+      email: updates.email?.trim() ?? existing.email,
+    };
+    setPartners((previous) =>
+      previous.map((partner) => (partner.id === partnerId ? updatedPartner : partner))
+    );
+    return updatedPartner;
+  };
+
+  const deletePartner = (partnerId: string) => {
+    if (currentRole !== 'ADMIN') {
+      throw new Error('Seul un administrateur peut supprimer une fiche partenaire.');
+    }
+    const partner = partners.find((item) => item.id === partnerId);
+    if (!partner) {
+      throw new Error('Partenaire introuvable.');
+    }
+
+    const normalizedName = partner.name.trim().toLowerCase();
+    const hasCashMovements = partnershipCashMovements.some(
+      (movement) =>
+        movement.partnerId === partnerId ||
+        (!movement.partnerId && movement.partnerName?.trim().toLowerCase() === normalizedName)
+    );
+    const hasContracts = partnerships.some((contract) =>
+      contract.members.some(
+        (member) =>
+          String(member.partnerId || '') === partnerId ||
+          (!member.isCompany && member.name.trim().toLowerCase() === normalizedName)
+      )
+    );
+    const hasLoans = loans.some(
+      (loan) =>
+        String(loan.partnerId || '') === partnerId ||
+        loan.partnerName.trim().toLowerCase() === normalizedName
+    );
+    if (hasCashMovements || hasContracts || hasLoans) {
+      throw new Error(
+        'Cette fiche est liée à des opérations, contrats ou prêts. Supprimez d’abord chaque enregistrement lié pour préserver son historique.'
+      );
+    }
+
+    setPartners((previous) => previous.filter((item) => item.id !== partnerId));
+  };
+
   const addPartnership = (partnershipData: Omit<Partnership, 'id' | 'reference' | 'createdAt'>): Partnership => {
     const year = new Date().getFullYear();
     const count = partnerships.filter((p) => p.reference?.startsWith(`PAR-${year}-`)).length;
@@ -4858,6 +5067,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updatePartnershipStatus = (id: string, status: PartnershipStatus) => {
     setPartnerships(
       partnerships.map((p) => (p.id === id ? { ...p, status } : p))
+    );
+  };
+
+  const deletePartnership = (partnershipId: string) => {
+    if (currentRole !== 'ADMIN') {
+      throw new Error('Seul un administrateur peut supprimer un contrat de partenariat.');
+    }
+    if (!partnerships.some((partnership) => partnership.id === partnershipId)) {
+      throw new Error('Contrat de partenariat introuvable.');
+    }
+    setPartnerships((previous) =>
+      previous.filter((partnership) => partnership.id !== partnershipId)
     );
   };
 
@@ -4922,6 +5143,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return movement;
   };
 
+  const deletePartnershipCashMovement = (movementId: string) => {
+    if (currentRole !== 'ADMIN') {
+      throw new Error('Seul un administrateur peut supprimer une opération de partenariat.');
+    }
+    if (!partnershipCashMovements.some((movement) => movement.id === movementId)) {
+      throw new Error('Opération de partenariat introuvable.');
+    }
+    setPartnershipCashMovements((previous) =>
+      previous.filter((movement) => movement.id !== movementId)
+    );
+  };
+
   const addLoan = (loanData: Omit<PartnershipLoan, 'id' | 'reference' | 'createdAt' | 'repayments'>) => {
     const year = new Date().getFullYear();
     const count = loans.filter((l) => l.reference?.startsWith(`PRET-${year}-`)).length;
@@ -4934,6 +5167,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       repayments: [],
     };
     setLoans([newLoan, ...loans]);
+  };
+
+  const deleteLoan = (loanId: string) => {
+    if (currentRole !== 'ADMIN') {
+      throw new Error('Seul un administrateur peut supprimer un prêt.');
+    }
+    if (!loans.some((loan) => loan.id === loanId)) {
+      throw new Error('Prêt introuvable.');
+    }
+    setLoans((previous) => previous.filter((loan) => loan.id !== loanId));
   };
 
   const addLoanRepayment = (loanId: string, repaymentData: Omit<PartnershipRepayment, 'paidAt'>) => {
@@ -5702,35 +5945,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
-  const resetToDefaults = async (): Promise<void> => {
-    await Promise.all([
-      FirebaseSyncService.clearBusinessData(),
-      WhatsAppDirectService.resetAutomationData().catch((err) => {
-        console.warn('WhatsApp backend reset warning:', err);
-      }),
-    ]);
-    setContacts([]);
-    setBankBalances(EMPTY_BANK_BALANCES);
-    setOperations([]);
-    setPurchases([]);
-    setStockMovements([]);
-    setCurrencyBalances(EMPTY_CURRENCY_BALANCES);
-    setCurrencyStockMovements([]);
-    setGoldCurrencyBalances(EMPTY_GOLD_CURRENCY_BALANCES);
-    setGoldCurrencyMovements([]);
-    setExchanges([]);
-    setSales([]);
-    setSaleRecords([]);
-    setPartners([]);
-    setPartnerships([]);
-    setPartnershipCashMovements([]);
-    setLoans([]);
-    setPurchaseFormulaConfig(DEFAULT_PURCHASE_FORMULA_CONFIG);
-    setTasks([]);
-    setEmployees([]);
-    setSalaryPayments([]);
-  };
-
   const updatePurchaseFormulaConfig = (updates: Partial<PurchaseFormulaConfig>) => {
     setPurchaseFormulaConfig((prev) => {
       const next = { ...prev, ...updates };
@@ -5808,16 +6022,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const canAccessModule = (moduleId: number): boolean => {
+    if (currentRole === 'ADMIN') return true;
     const { modules, services } = getCurrentUserEffectivePermissions();
-    if (
-      currentRole === 'ADMIN' &&
-      moduleId === 14 &&
-      modules.includes(12) &&
-      !modules.includes(14) &&
-      (services === undefined || services.length <= 39)
-    ) {
-      return true;
-    }
     if (services !== undefined) {
       const modServices = getModuleServices(moduleId);
       if (modServices.length > 0) {
@@ -5828,17 +6034,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const canAccessService = (moduleId: number, serviceId: string): boolean => {
+    if (currentRole === 'ADMIN') return true;
     if (!canAccessModule(moduleId)) return false;
     const { modules, services } = getCurrentUserEffectivePermissions();
-    if (
-      currentRole === 'ADMIN' &&
-      moduleId === 14 &&
-      modules.includes(12) &&
-      !modules.includes(14) &&
-      (services === undefined || services.length <= 39)
-    ) {
-      return true;
-    }
     if (services === undefined) return true;
     return services.includes(serviceId);
   };
@@ -6266,9 +6464,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         cancelPurchase,
         stockWeightForKarat,
         adjustGoldStock,
+        deleteGoldStockAdjustment,
         reconcileGoldStockWithUnsoldPurchases,
         addSale,
         addSaleRecord,
+        deleteSaleRecord,
         updateSaleRecordBars,
         updateSaleFixings,
         updateSalePurchaseCost,
@@ -6280,14 +6480,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         sellCurrency,
         addCurrencyMovementPayment,
         addPartner,
+        updatePartner,
+        deletePartner,
         addPartnership,
         addPartnershipCashMovement,
+        deletePartnershipCashMovement,
+        deletePartnership,
         updatePartnershipStatus,
         addLoan,
+        deleteLoan,
         addLoanRepayment,
         updatePurchaseFormulaConfig,
         resetPurchaseFormulaConfig,
-        resetToDefaults,
         cashPaymentRedirect,
         openCashForPayment,
         clearCashPaymentRedirect,
