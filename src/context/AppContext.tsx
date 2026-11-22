@@ -503,8 +503,6 @@ interface AppContextType {
   generateMonthlyPayroll: (periodMonth: string) => number;
   paySalaryRecord: (params: {
     paymentId: string;
-    account: string;
-    debitTreasury: boolean;
     note?: string;
   }) => SalaryPaymentRecord | null;
   deleteSalaryPayment: (paymentId: string) => void;
@@ -6126,8 +6124,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const paySalaryRecord: AppContextType['paySalaryRecord'] = ({
     paymentId,
-    account,
-    debitTreasury,
     note,
   }) => {
     const target = salaryPayments.find((p) => p.id === paymentId);
@@ -6136,10 +6132,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const now = new Date();
     const nowIso = now.toISOString();
     const dateLabel = `${now.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })} · ${now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
-    const chosenAccount = account || 'Caisse (espèces)';
+    const chosenAccount =
+      Object.keys(bankBalances).find((name) => name.toLowerCase().includes('caisse')) ||
+      'Caisse (espèces)';
     let opId: string | undefined = target.ledgerOperationId;
 
-    if (debitTreasury && target.netSalaryXaf > 0) {
+    if (target.netSalaryXaf > 0) {
       const updatedBalances = {
         ...bankBalances,
         [chosenAccount]: (bankBalances[chosenAccount] ?? 0) - target.netSalaryXaf,
@@ -6150,7 +6148,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       opId = `op-sal-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
       const newEntry: LedgerEntry = {
         id: opId,
-        title: `Paiement salaire · ${target.employeeName}`,
+        title: `Dépense OPEX · Salaires · ${target.employeeName}`,
         subtitle: `${target.reference} (${target.periodMonth}) · ${target.jobTitle} · ${chosenAccount}`,
         date: dateLabel,
         createdAt: nowIso,
@@ -6170,7 +6168,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...target,
       status: 'paid',
       paidAt: nowIso,
-      paidFromAccount: debitTreasury ? chosenAccount : 'Hors caisse / Réglé externe',
+      paidFromAccount: chosenAccount,
       ledgerOperationId: opId,
       notes: note || target.notes,
       updatedAt: nowIso,

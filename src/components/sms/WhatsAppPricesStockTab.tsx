@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -112,6 +112,8 @@ export const WhatsAppPricesStockTab: React.FC<WhatsAppPricesStockTabProps> = ({
   const [currencyDrafts, setCurrencyDrafts] = useState<CurrencyRateInventoryEntry[]>(
     automationState.currencyRates
   );
+  const goldDraftsDirty = useRef(false);
+  const currencyDraftsDirty = useRef(false);
   const [newCurrencyCode, setNewCurrencyCode] = useState('');
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(
@@ -119,14 +121,15 @@ export const WhatsAppPricesStockTab: React.FC<WhatsAppPricesStockTabProps> = ({
   );
 
   useEffect(() => {
-    setGoldDrafts(automationState.goldPrices);
-    setCurrencyDrafts(automationState.currencyRates);
+    if (!goldDraftsDirty.current) setGoldDrafts(automationState.goldPrices);
+    if (!currencyDraftsDirty.current) setCurrencyDrafts(automationState.currencyRates);
   }, [automationState.goldPrices, automationState.currencyRates]);
 
   const updateGoldField = (
     cat: 'OR_BRUT' | 'OR_FONDU' | 'BIJOUX',
     patch: Partial<GoldPriceQuoteEntry>
   ) => {
+    goldDraftsDirty.current = true;
     setGoldDrafts((prev) => ({
       ...prev,
       [cat]: {
@@ -141,6 +144,7 @@ export const WhatsAppPricesStockTab: React.FC<WhatsAppPricesStockTabProps> = ({
     karatKey: string,
     value: number
   ) => {
+    goldDraftsDirty.current = true;
     setGoldDrafts((prev) => {
       const current = prev[cat];
       const nextKarats = {
@@ -205,6 +209,7 @@ export const WhatsAppPricesStockTab: React.FC<WhatsAppPricesStockTabProps> = ({
         validUntil: cleanedValidUntil,
         status: targetStatus,
       });
+      goldDraftsDirty.current = false;
       setFeedback({
         type: 'success',
         text:
@@ -223,6 +228,7 @@ export const WhatsAppPricesStockTab: React.FC<WhatsAppPricesStockTabProps> = ({
   };
 
   const updateCurrencyRow = (code: string, patch: Partial<CurrencyRateInventoryEntry>) => {
+    currencyDraftsDirty.current = true;
     setCurrencyDrafts((prev) =>
       prev.map((row) => {
         if (row.code !== code) return row;
@@ -239,6 +245,7 @@ export const WhatsAppPricesStockTab: React.FC<WhatsAppPricesStockTabProps> = ({
   const handleAddCurrency = () => {
     const code = newCurrencyCode.trim().toUpperCase();
     if (!code || currencyDrafts.some((c) => c.code === code)) return;
+    currencyDraftsDirty.current = true;
     setCurrencyDrafts((prev) => [
       ...prev,
       {
@@ -308,6 +315,7 @@ export const WhatsAppPricesStockTab: React.FC<WhatsAppPricesStockTabProps> = ({
           ? `Validation taux & stocks devises par ${actorName} (${validatedCodes.join(', ')}).`
           : `Enregistrement brouillon des taux & stocks devises.`
       );
+      currencyDraftsDirty.current = false;
       setFeedback({
         type: 'success',
         text: approveAll

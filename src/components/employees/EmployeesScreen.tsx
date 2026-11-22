@@ -151,8 +151,6 @@ export const EmployeesScreen: React.FC = () => {
 
   // Pay confirmation modal
   const [paymentToPay, setPaymentToPay] = useState<SalaryPaymentRecord | null>(null);
-  const [payAccount, setPayAccount] = useState('Caisse (espèces)');
-  const [debitTreasury, setDebitTreasury] = useState(true);
   const [payNote, setPayNote] = useState('');
   const [isPaying, setIsPaying] = useState(false);
 
@@ -161,6 +159,10 @@ export const EmployeesScreen: React.FC = () => {
   const [showMonthlyStatementPreview, setShowMonthlyStatementPreview] = useState(false);
 
   const accountNames = useMemo(() => Object.keys(store.bankBalances), [store.bankBalances]);
+  const cashAccountName = useMemo(
+    () => accountNames.find((account) => account.toLowerCase().includes('caisse')) || 'Caisse (espèces)',
+    [accountNames]
+  );
 
   const filteredEmployees = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -415,15 +417,11 @@ export const EmployeesScreen: React.FC = () => {
     try {
       store.paySalaryRecord({
         paymentId: paymentToPay.id,
-        account: payAccount,
-        debitTreasury,
         note: payNote.trim() || undefined,
       });
       setFeedback({
         type: 'success',
-        text: `Salaire de ${paymentToPay.employeeName} (${formatMoney(paymentToPay.netSalaryXaf)} FCFA) marqué payé${
-          debitTreasury ? ` et débité sur ${payAccount}` : ''
-        }.`,
+        text: `Salaire de ${paymentToPay.employeeName} (${formatMoney(paymentToPay.netSalaryXaf)} FCFA) payé depuis ${cashAccountName} et enregistré en charge OPEX.`,
       });
       setPaymentToPay(null);
       setPayNote('');
@@ -936,8 +934,6 @@ export const EmployeesScreen: React.FC = () => {
                                   type="button"
                                   onClick={() => {
                                     setPaymentToPay(rec);
-                                    setPayAccount(accountNames[0] || 'Caisse (espèces)');
-                                    setDebitTreasury(true);
                                     setPayNote('');
                                   }}
                                   className="px-2.5 py-1 rounded-lg bg-[#008B62] hover:bg-[#007452] text-white text-[11px] font-extrabold cursor-pointer"
@@ -1469,34 +1465,12 @@ export const EmployeesScreen: React.FC = () => {
               </div>
             </div>
 
-            <label className="flex items-start gap-2 font-semibold cursor-pointer p-2.5 rounded-xl border border-[#E8D8BE] bg-white">
-              <input
-                type="checkbox"
-                checked={debitTreasury}
-                onChange={(e) => setDebitTreasury(e.target.checked)}
-                className="mt-0.5"
-              />
-              <span>
-                Débiter le compte sélectionné et enregistrer automatiquement la charge dans le Grand Livre (Caisse / Banques)
-              </span>
-            </label>
-
-            {debitTreasury && (
-              <div>
-                <label className="block font-bold text-[#7D8176] mb-1">Compte de paiement *</label>
-                <select
-                  value={payAccount}
-                  onChange={(e) => setPayAccount(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-[#E8D8BE] bg-[#FAF8F3] font-bold"
-                >
-                  {accountNames.map((acc) => (
-                    <option key={acc} value={acc}>
-                      {acc} (Solde : {formatMoney(store.bankBalances[acc] || 0)} FCFA)
-                    </option>
-                  ))}
-                </select>
+            <div className="p-3 rounded-xl border border-[#E8D8BE] bg-white font-semibold">
+              Paiement débité automatiquement de la caisse <strong>{cashAccountName}</strong> et comptabilisé en charge OPEX.
+              <div className="mt-1 text-[#7D8176]">
+                Solde actuel : {formatMoney(store.bankBalances[cashAccountName] || 0)} FCFA
               </div>
-            )}
+            </div>
 
             <div>
               <label className="block font-bold text-[#7D8176] mb-1">Note de paiement</label>
