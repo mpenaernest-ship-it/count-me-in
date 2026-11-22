@@ -1,0 +1,1119 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import type {
+  CategoryScheduleRule,
+  CurrencyRateInventoryEntry,
+  GoldPriceQuoteEntry,
+  PriceApprovalStatus,
+  WhatsAppAuditLog,
+  WhatsAppAutomationSettings,
+  WhatsAppAutomationState,
+  WhatsAppBusinessCategory,
+  WhatsAppCampaignRecord,
+  WhatsAppCampaignType,
+  WhatsAppCRMRecipient,
+  WhatsAppMessageLog,
+  WhatsAppMessageTemplate,
+  WhatsAppPreviewItem,
+  WhatsAppPreviewResponse,
+} from '../src/types/whatsappAutomation.ts';
+
+const AUTOMATION_FILE = path.resolve(process.cwd(), '.whatsapp-automation.json');
+
+export const ALL_CATEGORIES: WhatsAppBusinessCategory[] = [
+  'OR_BRUT',
+  'OR_FONDU',
+  'BIJOUX',
+  'FOURNISSEUR_DEVISES',
+  'CLIENT_DEVISES',
+];
+
+export const GOLD_REQUIRED_CARATS: Record<'OR_BRUT' | 'BIJOUX', readonly string[]> = {
+  OR_BRUT: ['23K', '22K', '21K', '20K'],
+  BIJOUX: ['22K', '21K', '18K', '14K', '9K'],
+};
+
+const LEGACY_TEMPLATE_BODIES: Record<'OR_BRUT' | 'OR_FONDU' | 'BIJOUX', string> = {
+  OR_BRUT: `CAMS GOLD
+OFFRE D’ACHAT – OR BRUT
+
+Bonjour {nom},
+Voici nos prix d’achat pour cette semaine :
+Prix du gramme : {prix} FCFA
+
+Nous restons disponibles pour vos transactions.
+Cordialement,
+CAMS GOLD.`,
+  OR_FONDU: `CAMS GOLD
+COURS DU JOUR – OR FONDU
+
+Bonjour {nom},
+Notre prix d’achat du jour est fixé à :
+{prix} FCFA / gramme.
+
+Merci pour votre confiance.
+CAMS GOLD.`,
+  BIJOUX: `CAMS GOLD
+OFFRE D’ACHAT – BIJOUX
+
+Bonjour {nom},
+Voici notre prix d’achat hebdomadaire :
+{prix} FCFA / gramme.
+
+Nous restons à votre disposition.
+CAMS GOLD.`,
+};
+
+const DEFAULT_TEMPLATES_SEED: WhatsAppMessageTemplate[] = [
+  {
+    id: 'tpl-or-brut',
+    category: 'OR_BRUT',
+    title: 'Modèle 1 – Fournisseur d’or brut',
+    language: 'fr',
+    metaTemplateName: 'cams_offre_achat_or_brut',
+    body: `CAMS GOLD
+OFFRE D’ACHAT – OR BRUT
+
+Bonjour {nom},
+Voici nos prix d’achat par gramme pour cette semaine :
+23k : {prix_23k} FCFA / g
+22k : {prix_22k} FCFA / g
+21k : {prix_21k} FCFA / g
+20k : {prix_20k} FCFA / g
+
+Nous restons disponibles pour vos transactions.
+Cordialement,
+CAMS GOLD.`,
+    updatedAt: new Date().toISOString(),
+    updatedBy: 'Système',
+  },
+  {
+    id: 'tpl-or-fondu',
+    category: 'OR_FONDU',
+    title: 'Modèle 2 – Fournisseur d’or fondu',
+    language: 'fr',
+    metaTemplateName: 'cams_cours_jour_or_fondu',
+    body: `CAMS GOLD
+COURS DU JOUR – OR FONDU
+
+Bonjour {nom},
+Notre prix d’achat du jour est fixé à :
+{prix} FCFA / carat.
+
+Merci pour votre confiance.
+CAMS GOLD.`,
+    updatedAt: new Date().toISOString(),
+    updatedBy: 'Système',
+  },
+  {
+    id: 'tpl-bijoux',
+    category: 'BIJOUX',
+    title: 'Modèle 3 – Fournisseur de bijoux',
+    language: 'fr',
+    metaTemplateName: 'cams_offre_achat_bijoux',
+    body: `CAMS GOLD
+OFFRE D’ACHAT – BIJOUX
+
+Bonjour {nom},
+Voici nos prix d’achat hebdomadaires par gramme :
+22k : {prix_22k} FCFA / g
+21k : {prix_21k} FCFA / g
+18k : {prix_18k} FCFA / g
+14k : {prix_14k} FCFA / g
+9k : {prix_9k} FCFA / g
+
+Nous restons à votre disposition.
+CAMS GOLD.`,
+    updatedAt: new Date().toISOString(),
+    updatedBy: 'Système',
+  },
+  {
+    id: 'tpl-fourn-devises',
+    category: 'FOURNISSEUR_DEVISES',
+    title: 'Modèle 4 – Fournisseur de devises',
+    language: 'fr',
+    metaTemplateName: 'cams_cours_achat_devises',
+    body: `CAMS GOLD
+COURS D’ACHAT DU JOUR
+
+Bonjour {nom},
+Devise : {devise}
+Notre prix d’achat :
+1 {devise} = {prix_achat} FCFA.
+
+Cordialement,
+CAMS GOLD.`,
+    updatedAt: new Date().toISOString(),
+    updatedBy: 'Système',
+  },
+  {
+    id: 'tpl-client-devises',
+    category: 'CLIENT_DEVISES',
+    title: 'Modèle 5 – Client de devises',
+    language: 'fr',
+    metaTemplateName: 'cams_cours_vente_devises',
+    body: `CAMS GOLD
+COURS DE VENTE DU JOUR
+
+Bonjour {nom},
+Devise : {devise}
+Prix de vente : 1 {devise} = {prix_vente} FCFA.
+Disponibilité : {stock_disponible} {devise}.
+
+Pour toute transaction, veuillez nous contacter.
+CAMS GOLD.`,
+    updatedAt: new Date().toISOString(),
+    updatedBy: 'Système',
+  },
+];
+
+export const DEFAULT_AUTOMATION_SETTINGS: WhatsAppAutomationSettings = {
+  enabled: false,
+  paused: false,
+  hour: 9,
+  minute: 0,
+  timezone: 'Africa/Brazzaville',
+  currencyClientMode: 'per_currency',
+  autoRetryEnabled: true,
+  maxRetries: 3,
+  retryDelayMinutes: 10,
+  adminAlertMessage: null,
+};
+
+export const DEFAULT_CATEGORY_SCHEDULES: CategoryScheduleRule[] = [
+  { category: 'OR_BRUT', frequency: 'weekly', weekday: 1, enabled: true },
+  { category: 'OR_FONDU', frequency: 'daily', weekday: 1, enabled: true },
+  { category: 'BIJOUX', frequency: 'weekly', weekday: 1, enabled: true },
+  { category: 'FOURNISSEUR_DEVISES', frequency: 'daily', weekday: 1, enabled: true },
+  { category: 'CLIENT_DEVISES', frequency: 'daily', weekday: 1, enabled: true },
+];
+
+export const normalizeGoldKaratPrices = (
+  category: 'OR_BRUT' | 'BIJOUX',
+  raw?: Record<string, number> | null
+): Record<string, number> => {
+  const out: Record<string, number> = {};
+  for (const k of GOLD_REQUIRED_CARATS[category]) {
+    const rawVal = raw?.[k] ?? raw?.[k.toLowerCase()];
+    const num = Number(rawVal);
+    out[k] = Number.isFinite(num) && num > 0 ? Math.round(num * 100) / 100 : 0;
+  }
+  return out;
+};
+
+const createDefaultGoldPrices = (): Record<'OR_BRUT' | 'OR_FONDU' | 'BIJOUX', GoldPriceQuoteEntry> => {
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  return {
+    OR_BRUT: {
+      category: 'OR_BRUT',
+      pricePerGramXaf: 0,
+      unit: 'gramme',
+      currency: 'FCFA',
+      karatPricesXaf: normalizeGoldKaratPrices('OR_BRUT'),
+      source: 'manual',
+      status: 'draft',
+      validFrom: todayStr,
+      validUntil: '',
+      updatedAt: now.toISOString(),
+      updatedBy: 'Système',
+    },
+    OR_FONDU: {
+      category: 'OR_FONDU',
+      pricePerGramXaf: 0,
+      unit: 'carat',
+      currency: 'FCFA',
+      source: 'manual',
+      status: 'draft',
+      validFrom: todayStr,
+      validUntil: '',
+      updatedAt: now.toISOString(),
+      updatedBy: 'Système',
+    },
+    BIJOUX: {
+      category: 'BIJOUX',
+      pricePerGramXaf: 0,
+      unit: 'gramme',
+      currency: 'FCFA',
+      karatPricesXaf: normalizeGoldKaratPrices('BIJOUX'),
+      source: 'manual',
+      status: 'draft',
+      validFrom: todayStr,
+      validUntil: '',
+      updatedAt: now.toISOString(),
+      updatedBy: 'Système',
+    },
+  };
+};
+
+const createDefaultCurrencyRates = (): CurrencyRateInventoryEntry[] => {
+  const now = new Date();
+  return ['USD', 'EUR', 'AED'].map((code) => ({
+    code,
+    buyRateXaf: 0,
+    sellRateXaf: 0,
+    physicalStock: 0,
+    reservedStock: 0,
+    availableStock: 0,
+    minAnnounceStock: 100,
+    status: 'draft' as PriceApprovalStatus,
+    validUntil: '',
+    updatedAt: now.toISOString(),
+    updatedBy: 'Système',
+  }));
+};
+
+export interface PersistedAutomationData {
+  settings: WhatsAppAutomationSettings;
+  categorySchedules: CategoryScheduleRule[];
+  goldPrices: Record<'OR_BRUT' | 'OR_FONDU' | 'BIJOUX', GoldPriceQuoteEntry>;
+  currencyRates: CurrencyRateInventoryEntry[];
+  templates: WhatsAppMessageTemplate[];
+  recipients: WhatsAppCRMRecipient[];
+  campaigns: WhatsAppCampaignRecord[];
+  logs: WhatsAppMessageLog[];
+  auditLogs: WhatsAppAuditLog[];
+  lastRunDate: string | null;
+  lastRunAt: string | null;
+  lastStatus: 'idle' | 'running' | 'success' | 'partial' | 'error';
+  lastError: string | null;
+  updatedAt: string;
+}
+
+export const createDefaultData = (): PersistedAutomationData => ({
+  settings: { ...DEFAULT_AUTOMATION_SETTINGS },
+  categorySchedules: DEFAULT_CATEGORY_SCHEDULES.map((r) => ({ ...r })),
+  goldPrices: createDefaultGoldPrices(),
+  currencyRates: createDefaultCurrencyRates(),
+  templates: DEFAULT_TEMPLATES_SEED.map((t) => ({ ...t })),
+  recipients: [],
+  campaigns: [],
+  logs: [],
+  auditLogs: [],
+  lastRunDate: null,
+  lastRunAt: null,
+  lastStatus: 'idle',
+  lastError: null,
+  updatedAt: new Date().toISOString(),
+});
+
+export const normalizeDigits = (rawPhone: string): string => {
+  let digits = (rawPhone || '').replace(/[^\d]/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('00')) {
+    digits = digits.slice(2);
+  }
+  if (digits.length === 9 && digits.startsWith('0')) {
+    digits = `242${digits}`;
+  }
+  return digits;
+};
+
+export const inferRecipientCategories = (roles: string[]): WhatsAppBusinessCategory[] => {
+  const lower = (roles || []).map((r) => r.toLowerCase());
+  const cats = new Set<WhatsAppBusinessCategory>();
+  for (const r of lower) {
+    if (r.includes('fournisseur') && r.includes('brut')) cats.add('OR_BRUT');
+    if (r.includes('fournisseur') && r.includes('fondu')) cats.add('OR_FONDU');
+    if (r.includes('fournisseur') && r.includes('bijou')) cats.add('BIJOUX');
+    if (r.includes('fournisseur') && (r.includes('devise') || r.includes('change'))) {
+      cats.add('FOURNISSEUR_DEVISES');
+    }
+    if (r.includes('client') && (r.includes('devise') || r.includes('change'))) {
+      cats.add('CLIENT_DEVISES');
+    }
+  }
+  return Array.from(cats);
+};
+
+export const getBrazzavilleClock = (timeZone = 'Africa/Brazzaville') => {
+  const tz = timeZone || 'Africa/Brazzaville';
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    weekday: 'short',
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(new Date());
+  const pick = (t: string) => parts.find((p) => p.type === t)?.value || '';
+  const rawHour = Number(pick('hour') || '0');
+  const hour = rawHour === 24 ? 0 : rawHour;
+  const minute = Number(pick('minute') || '0');
+  const dateKey = `${pick('year')}-${pick('month')}-${pick('day')}`;
+  const weekdayToken = pick('weekday').toLowerCase().slice(0, 3);
+  const weekdayMap: Record<string, number> = {
+    sun: 0,
+    mon: 1,
+    tue: 2,
+    wed: 3,
+    thu: 4,
+    fri: 5,
+    sat: 6,
+  };
+  const weekday = weekdayMap[weekdayToken] ?? new Date().getDay();
+  return {
+    dateKey,
+    hour,
+    minute,
+    timeLabel: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`,
+    weekday,
+  };
+};
+
+export const formatFrNumber = (val: number, decimals?: number): string => {
+  const safeVal = Number.isFinite(val) ? val : 0;
+  const hasDecimals = Math.abs(safeVal - Math.round(safeVal)) >= 0.005;
+  const minFrac = decimals !== undefined ? decimals : hasDecimals ? 2 : 0;
+  const maxFrac = decimals !== undefined ? decimals : 2;
+  return new Intl.NumberFormat('fr-FR', {
+    minimumFractionDigits: minFrac,
+    maximumFractionDigits: maxFrac,
+  })
+    .format(safeVal)
+    .replace(/\u202F/g, ' ');
+};
+
+export const normalizeAutomationData = (
+  parsed?: Partial<PersistedAutomationData> | null
+): PersistedAutomationData => {
+  const base = createDefaultData();
+  if (!parsed || typeof parsed !== 'object') {
+    return base;
+  }
+  const mergedTemplates = DEFAULT_TEMPLATES_SEED.map((defTpl) => {
+    const savedTpl = (parsed.templates || []).find((t) => t.category === defTpl.category);
+    if (!savedTpl) return defTpl;
+    const legacyBody =
+      defTpl.category === 'OR_BRUT' || defTpl.category === 'OR_FONDU' || defTpl.category === 'BIJOUX'
+        ? LEGACY_TEMPLATE_BODIES[defTpl.category]
+        : null;
+    const shouldUpgradeBody =
+      legacyBody && (savedTpl.body || '').trim() === legacyBody.trim();
+    return {
+      ...defTpl,
+      ...savedTpl,
+      body: shouldUpgradeBody ? defTpl.body : savedTpl.body || defTpl.body,
+    };
+  });
+  const mergedSchedules = DEFAULT_CATEGORY_SCHEDULES.map((defRule) => {
+    const savedRule = (parsed.categorySchedules || []).find(
+      (r) => r.category === defRule.category
+    );
+    return savedRule ? { ...defRule, ...savedRule } : defRule;
+  });
+
+  const savedBrut = parsed.goldPrices?.OR_BRUT;
+  const savedFondu = parsed.goldPrices?.OR_FONDU;
+  const savedBijoux = parsed.goldPrices?.BIJOUX;
+
+  const brutKarats = normalizeGoldKaratPrices('OR_BRUT', savedBrut?.karatPricesXaf);
+  const bijouxKarats = normalizeGoldKaratPrices('BIJOUX', savedBijoux?.karatPricesXaf);
+
+  // Migration automatique d'un ancien tarif Or fondu saisi en FCFA / gramme vers FCFA / carat
+  let fonduPerCarat = Number(savedFondu?.pricePerGramXaf || 0);
+  let fonduRef24k = savedFondu?.reference24kPerGramXaf;
+  if (savedFondu?.unit === 'gramme' && fonduPerCarat > 15000) {
+    fonduRef24k = fonduPerCarat;
+    fonduPerCarat = Math.round((fonduPerCarat / 24) * 100) / 100;
+  }
+
+  return {
+    ...base,
+    ...parsed,
+    settings: { ...DEFAULT_AUTOMATION_SETTINGS, ...(parsed.settings || {}) },
+    categorySchedules: mergedSchedules,
+    goldPrices: {
+      OR_BRUT: {
+        ...base.goldPrices.OR_BRUT,
+        ...(savedBrut || {}),
+        unit: 'gramme',
+        karatPricesXaf: brutKarats,
+      },
+      OR_FONDU: {
+        ...base.goldPrices.OR_FONDU,
+        ...(savedFondu || {}),
+        pricePerGramXaf: fonduPerCarat,
+        ...(fonduRef24k ? { reference24kPerGramXaf: fonduRef24k } : {}),
+        unit: 'carat',
+      },
+      BIJOUX: {
+        ...base.goldPrices.BIJOUX,
+        ...(savedBijoux || {}),
+        unit: 'gramme',
+        karatPricesXaf: bijouxKarats,
+      },
+    },
+    currencyRates:
+      Array.isArray(parsed.currencyRates) && parsed.currencyRates.length > 0
+        ? parsed.currencyRates.map((r) => ({
+            ...r,
+            availableStock: Math.max(
+              0,
+              (Number(r.physicalStock) || 0) - (Number(r.reservedStock) || 0)
+            ),
+          }))
+        : base.currencyRates,
+    templates: mergedTemplates,
+    recipients: Array.isArray(parsed.recipients) ? parsed.recipients : [],
+    campaigns: Array.isArray(parsed.campaigns) ? parsed.campaigns : [],
+    logs: Array.isArray(parsed.logs) ? parsed.logs : [],
+    auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : [],
+  };
+};
+
+export const prepareAutomationSave = (
+  data: PersistedAutomationData
+): PersistedAutomationData => ({
+  ...data,
+  campaigns: data.campaigns.slice(0, 120),
+  logs: data.logs.slice(0, 1200),
+  auditLogs: data.auditLogs.slice(0, 500),
+  updatedAt: new Date().toISOString(),
+});
+
+export const loadAutomationData = (): PersistedAutomationData => {
+  try {
+    if (!fs.existsSync(AUTOMATION_FILE)) {
+      return createDefaultData();
+    }
+    const raw = fs.readFileSync(AUTOMATION_FILE, 'utf8');
+    const parsed = JSON.parse(raw) as Partial<PersistedAutomationData>;
+    return normalizeAutomationData(parsed);
+  } catch {
+    return createDefaultData();
+  }
+};
+
+export const saveAutomationData = (data: PersistedAutomationData): PersistedAutomationData => {
+  const next = prepareAutomationSave(data);
+  try {
+    fs.writeFileSync(AUTOMATION_FILE, JSON.stringify(next, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Failed to save .whatsapp-automation.json:', err);
+  }
+  return next;
+};
+
+export const appendAuditLog = (
+  data: PersistedAutomationData,
+  entry: Omit<WhatsAppAuditLog, 'id' | 'timestamp'>
+): PersistedAutomationData => {
+  const audit: WhatsAppAuditLog = {
+    id: `aud-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+    timestamp: new Date().toISOString(),
+    ...entry,
+  };
+  return {
+    ...data,
+    auditLogs: [audit, ...data.auditLogs],
+  };
+};
+
+export const isPriceExpired = (validUntil?: string): boolean => {
+  const raw = (validUntil || '').trim();
+  if (!raw) return false;
+  let normalized = raw;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    normalized = `${normalized}T23:59:59+01:00`;
+  } else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(normalized)) {
+    normalized = `${normalized}+01:00`;
+  }
+  const ts = Date.parse(normalized);
+  if (Number.isNaN(ts)) return false;
+  return ts < Date.now();
+};
+
+export const getEffectiveGoldStatus = (entry: GoldPriceQuoteEntry): PriceApprovalStatus => {
+  if (entry.status === 'validated' && isPriceExpired(entry.validUntil)) {
+    return 'expired';
+  }
+  return entry.status;
+};
+
+export const getEffectiveCurrencyStatus = (
+  entry: CurrencyRateInventoryEntry
+): PriceApprovalStatus => {
+  if (entry.status === 'validated' && isPriceExpired(entry.validUntil)) {
+    return 'expired';
+  }
+  return entry.status;
+};
+
+export const getScheduledCategoriesForWeekday = (
+  schedules: CategoryScheduleRule[],
+  weekday: number
+): WhatsAppBusinessCategory[] =>
+  schedules
+    .filter((rule) => {
+      if (!rule.enabled) return false;
+      if (rule.frequency === 'daily') return true;
+      return rule.weekday === weekday;
+    })
+    .map((rule) => rule.category);
+
+const renderTemplate = (body: string, vars: Record<string, string>): string => {
+  let out = body;
+  for (const [k, v] of Object.entries(vars)) {
+    out = out.replace(new RegExp(`\\{${k}\\}`, 'gi'), v);
+  }
+  return out;
+};
+
+const toDateKeyInTz = (isoStr: string | undefined, tz = 'Africa/Brazzaville'): string => {
+  if (!isoStr) return '';
+  const d = new Date(isoStr);
+  if (Number.isNaN(d.getTime())) return '';
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(d);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value || '';
+    return `${get('year')}-${get('month')}-${get('day')}`;
+  } catch {
+    return isoStr.slice(0, 10);
+  }
+};
+
+export const getDailyDeliverySignature = (
+  phone: string,
+  category: string,
+  currencyCode?: string
+): string => {
+  const digits = normalizeDigits(phone || '') || 'UNKNOWN';
+  const curr = (currencyCode || 'NONE').toUpperCase().trim() || 'NONE';
+  return `${digits}::${category}::${curr}`;
+};
+
+export const buildAutomationPreview = (
+  data: PersistedAutomationData,
+  options?: {
+    categories?: WhatsAppBusinessCategory[];
+    campaignType?: WhatsAppCampaignType;
+    ignoreDailyDedupe?: boolean;
+    forceIdenticalResend?: boolean;
+  }
+): WhatsAppPreviewResponse => {
+  const clock = getBrazzavilleClock(data.settings.timezone);
+  const scheduledToday = getScheduledCategoriesForWeekday(
+    data.categorySchedules,
+    clock.weekday
+  );
+  const targetCategories = Array.from(
+    new Set(
+      options?.categories && options.categories.length > 0
+        ? options.categories
+        : scheduledToday
+    )
+  );
+
+  const campaignType = options?.campaignType || 'scheduled_09h';
+  const items: WhatsAppPreviewItem[] = [];
+
+  const getRecipientBlockReasons = (r: WhatsAppCRMRecipient): string[] => {
+    const reasons: string[] = [];
+    if (r.archived) reasons.push('Contact archivé');
+    if (r.unsubscribed) reasons.push('Contact désabonné (liste suppression)');
+    if (r.whatsappStatus === 'suspended') reasons.push('Contact suspendu');
+    if (r.consentGranted !== true) reasons.push('Consentement WhatsApp non enregistré');
+    if (r.broadcastEnabled === false) reasons.push('Préférence de diffusion désactivée');
+    const digits = normalizeDigits(r.phone || '');
+    if (!digits || digits.length < 8) reasons.push('Numéro WhatsApp invalide ou absent');
+    return reasons;
+  };
+
+  const ACTIVE_LOG_STATUSES = ['pending', 'sending', 'accepted', 'delivered', 'read'];
+
+  const checkAlreadySentToday = (
+    idempotencyKey: string,
+    phone: string,
+    category: WhatsAppBusinessCategory,
+    currencyCode: string | undefined,
+    renderedText: string
+  ): { duplicate: boolean; reason?: string } => {
+    const signature = getDailyDeliverySignature(phone, category, currencyCode);
+    const normalizedText = renderedText.trim();
+    const matchingTodayLogs = data.logs.filter((l) => {
+      if (!ACTIVE_LOG_STATUSES.includes(l.status)) return false;
+      const sameKey = l.idempotencyKey === idempotencyKey;
+      const logDateKey = toDateKeyInTz(l.createdAt, data.settings.timezone);
+      const sameSignatureToday =
+        logDateKey === clock.dateKey &&
+        getDailyDeliverySignature(l.phone, l.category, l.currencyCode) === signature;
+      return sameKey || sameSignatureToday;
+    });
+
+    if (matchingTodayLogs.length === 0) {
+      return { duplicate: false };
+    }
+
+    const hasIdenticalContent = matchingTodayLogs.some(
+      (l) => (l.renderedText || '').trim() === normalizedText
+    );
+    if (hasIdenticalContent && !options?.forceIdenticalResend) {
+      return {
+        duplicate: true,
+        reason: 'Message identique déjà envoyé aujourd’hui (anti-doublon)',
+      };
+    }
+
+    if (!options?.ignoreDailyDedupe) {
+      return {
+        duplicate: true,
+        reason: 'Déjà envoyé aujourd’hui (anti-doublon)',
+      };
+    }
+
+    return { duplicate: false };
+  };
+
+  for (const category of targetCategories) {
+    const tpl = data.templates.find((t) => t.category === category);
+    const tplBody = tpl?.body || '';
+
+    const rawMatching = data.recipients.filter((r) => {
+      const explicitCats =
+        Array.isArray(r.whatsappCategories) && r.whatsappCategories.length > 0
+          ? r.whatsappCategories
+          : inferRecipientCategories(r.roles || []);
+      return explicitCats.includes(category);
+    });
+
+    // Dédoublonnage strict par numéro normalisé pour éviter d'envoyer 2 fois la même catégorie à un même numéro
+    const dedupedByPhone = new Map<string, WhatsAppCRMRecipient>();
+    const recipientScore = (r: WhatsAppCRMRecipient): number =>
+      getRecipientBlockReasons(r).length === 0 ? 2 : !r.archived && !r.unsubscribed ? 1 : 0;
+    for (const r of rawMatching) {
+      const phoneKey = normalizeDigits(r.phone || '') || r.reference;
+      const prev = dedupedByPhone.get(phoneKey);
+      if (!prev || recipientScore(r) > recipientScore(prev)) {
+        dedupedByPhone.set(phoneKey, r);
+      }
+    }
+    const matchingRecipients = Array.from(dedupedByPhone.values());
+
+    for (const r of matchingRecipients) {
+      const contactBlockReasons = getRecipientBlockReasons(r);
+
+      if (category === 'OR_FONDU') {
+        const quote = data.goldPrices.OR_FONDU;
+        const effStatus = getEffectiveGoldStatus(quote);
+        const priceReasons: string[] = [];
+        if (!quote || quote.pricePerGramXaf <= 0) {
+          priceReasons.push('Tarif absent');
+        } else if (effStatus === 'expired') {
+          priceReasons.push('Tarif expiré');
+        } else if (effStatus !== 'validated') {
+          priceReasons.push('Tarif en brouillon (non validé)');
+        }
+
+        const fonduWhole = Math.trunc(Number(quote?.pricePerGramXaf || 0));
+        const priceText = formatFrNumber(fonduWhole, 0);
+        const rendered = renderTemplate(tplBody, {
+          nom: r.name,
+          prix: priceText,
+          unite: 'carat',
+          devise: quote?.currency || 'FCFA',
+        });
+        const idempotencyKey = `${campaignType}_${clock.dateKey}_${r.reference}_${category}`;
+        const dedupeCheck = checkAlreadySentToday(
+          idempotencyKey,
+          r.phone,
+          category,
+          undefined,
+          rendered
+        );
+        const alreadySentToday = dedupeCheck.duplicate;
+        const allReasons = [
+          ...contactBlockReasons,
+          ...priceReasons,
+          ...(dedupeCheck.duplicate && dedupeCheck.reason ? [dedupeCheck.reason] : []),
+        ];
+
+        items.push({
+          id: `${r.reference}-${category}`,
+          contactRef: r.reference,
+          contactName: r.name,
+          phone: r.phone,
+          category,
+          priceSummary: `${priceText} ${quote?.currency || 'FCFA'} / carat`,
+          renderedText: rendered,
+          eligible: allReasons.length === 0,
+          blockReasons: allReasons,
+          idempotencyKey,
+          alreadySentToday,
+        });
+      } else if (category === 'OR_BRUT' || category === 'BIJOUX') {
+        const quote = data.goldPrices[category];
+        const effStatus = getEffectiveGoldStatus(quote);
+        const requiredCarats = GOLD_REQUIRED_CARATS[category];
+        const karatMap = normalizeGoldKaratPrices(category, quote?.karatPricesXaf);
+        const missingCarats = requiredCarats.filter((k) => !(karatMap[k] > 0));
+
+        const priceReasons: string[] = [];
+        if (missingCarats.length === requiredCarats.length) {
+          priceReasons.push('Tarif absent');
+        } else if (missingCarats.length > 0) {
+          priceReasons.push(`Tarif manquant (${missingCarats.join(', ')})`);
+        } else if (effStatus === 'expired') {
+          priceReasons.push('Tarif expiré');
+        } else if (effStatus !== 'validated') {
+          priceReasons.push('Tarif en brouillon (non validé)');
+        }
+
+        const currency = quote?.currency || 'FCFA';
+        const lines = requiredCarats.map(
+          (k) => `${k.toLowerCase()} : ${formatFrNumber(karatMap[k] || 0)} ${currency} / g`
+        );
+        const tarifsBlock = lines.join('\n');
+        const rendered = renderTemplate(tplBody, {
+          nom: r.name,
+          tarifs: tarifsBlock,
+          prix: tarifsBlock,
+          devise: currency,
+          prix_23k: formatFrNumber(karatMap['23K'] || 0),
+          prix_22k: formatFrNumber(karatMap['22K'] || 0),
+          prix_21k: formatFrNumber(karatMap['21K'] || 0),
+          prix_20k: formatFrNumber(karatMap['20K'] || 0),
+          prix_18k: formatFrNumber(karatMap['18K'] || 0),
+          prix_14k: formatFrNumber(karatMap['14K'] || 0),
+          prix_9k: formatFrNumber(karatMap['9K'] || 0),
+        });
+        const idempotencyKey = `${campaignType}_${clock.dateKey}_${r.reference}_${category}`;
+        const dedupeCheck = checkAlreadySentToday(
+          idempotencyKey,
+          r.phone,
+          category,
+          undefined,
+          rendered
+        );
+        const alreadySentToday = dedupeCheck.duplicate;
+        const allReasons = [
+          ...contactBlockReasons,
+          ...priceReasons,
+          ...(dedupeCheck.duplicate && dedupeCheck.reason ? [dedupeCheck.reason] : []),
+        ];
+
+        const summaryText =
+          missingCarats.length === requiredCarats.length
+            ? `0 ${currency} / g`
+            : `${requiredCarats.map((k) => `${k.toLowerCase()}: ${formatFrNumber(karatMap[k] || 0)}`).join(' · ')} ${currency}/g`;
+
+        items.push({
+          id: `${r.reference}-${category}`,
+          contactRef: r.reference,
+          contactName: r.name,
+          phone: r.phone,
+          category,
+          priceSummary: summaryText,
+          renderedText: rendered,
+          eligible: allReasons.length === 0,
+          blockReasons: allReasons,
+          idempotencyKey,
+          alreadySentToday,
+        });
+      } else if (category === 'FOURNISSEUR_DEVISES') {
+        const pref = (r.preferredCurrency || '').trim().toUpperCase();
+        const candidateRates = data.currencyRates.filter((cr) =>
+          pref && pref !== 'ALL' ? cr.code.toUpperCase() === pref : true
+        );
+        const ratesToCheck =
+          candidateRates.length > 0 ? candidateRates : data.currencyRates;
+
+        const validRates = ratesToCheck.filter((cr) => {
+          const st = getEffectiveCurrencyStatus(cr);
+          return st === 'validated' && cr.buyRateXaf > 0;
+        });
+
+        if (validRates.length === 0) {
+          const fallbackCode =
+            (pref && pref !== 'ALL' ? pref : ratesToCheck[0]?.code) || 'USD';
+          const positiveRates = ratesToCheck.filter((cr) => cr.buyRateXaf > 0);
+          let reason = 'Aucune devise configurée';
+          if (ratesToCheck.length > 0) {
+            if (positiveRates.length === 0) {
+              reason = `Tarif d’achat ${pref && pref !== 'ALL' ? pref : 'devise'} non renseigné (0 FCFA dans Prix & Stocks)`;
+            } else if (positiveRates.some((cr) => getEffectiveCurrencyStatus(cr) === 'expired')) {
+              reason = `Tarif d’achat ${positiveRates.map((c) => c.code).join('/')} expiré (revalidez dans Prix & Stocks)`;
+            } else {
+              reason = `Tarif d’achat ${positiveRates.map((c) => c.code).join('/')} en brouillon (cliquez Valider dans Prix & Stocks)`;
+            }
+          }
+          const idempotencyKey = `${campaignType}_${clock.dateKey}_${r.reference}_${category}`;
+          items.push({
+            id: `${r.reference}-${category}`,
+            contactRef: r.reference,
+            contactName: r.name,
+            phone: r.phone,
+            category,
+            currencyCode: fallbackCode,
+            priceSummary: `1 ${fallbackCode} = 0 FCFA`,
+            renderedText: renderTemplate(tplBody, {
+              nom: r.name,
+              devise: fallbackCode,
+              prix_achat: '0',
+            }),
+            eligible: false,
+            blockReasons: [...contactBlockReasons, reason],
+            idempotencyKey,
+            alreadySentToday: false,
+          });
+          continue;
+        }
+
+        for (const cr of validRates) {
+          const buyStr = formatFrNumber(cr.buyRateXaf);
+          const rendered = renderTemplate(tplBody, {
+            nom: r.name,
+            devise: cr.code,
+            prix_achat: buyStr,
+          });
+          const idempotencyKey = `${campaignType}_${clock.dateKey}_${r.reference}_${category}_${cr.code}`;
+          const dedupeCheck = checkAlreadySentToday(
+            idempotencyKey,
+            r.phone,
+            category,
+            cr.code,
+            rendered
+          );
+          const alreadySentToday = dedupeCheck.duplicate;
+          const allReasons = [
+            ...contactBlockReasons,
+            ...(dedupeCheck.duplicate && dedupeCheck.reason ? [dedupeCheck.reason] : []),
+          ];
+
+          items.push({
+            id: `${r.reference}-${category}-${cr.code}`,
+            contactRef: r.reference,
+            contactName: r.name,
+            phone: r.phone,
+            category,
+            currencyCode: cr.code,
+            priceSummary: `Achat 1 ${cr.code} = ${buyStr} FCFA`,
+            renderedText: rendered,
+            eligible: allReasons.length === 0,
+            blockReasons: allReasons,
+            idempotencyKey,
+            alreadySentToday,
+          });
+        }
+      } else if (category === 'CLIENT_DEVISES') {
+        const pref = (r.preferredCurrency || '').trim().toUpperCase();
+        const candidateRates = data.currencyRates.filter((cr) =>
+          pref && pref !== 'ALL' ? cr.code.toUpperCase() === pref : true
+        );
+        const ratesToCheck =
+          candidateRates.length > 0 ? candidateRates : data.currencyRates;
+
+        const eligibleRates = ratesToCheck.filter((cr) => {
+          const st = getEffectiveCurrencyStatus(cr);
+          const avail = Math.max(0, cr.physicalStock - cr.reservedStock);
+          const minStock = Math.max(0, cr.minAnnounceStock || 0);
+          return st === 'validated' && cr.sellRateXaf > 0 && avail > 0 && avail >= minStock;
+        });
+
+        if (eligibleRates.length === 0) {
+          const fallbackCode =
+            (pref && pref !== 'ALL' ? pref : ratesToCheck[0]?.code) || 'USD';
+          const validatedSellRates = ratesToCheck.filter(
+            (cr) => getEffectiveCurrencyStatus(cr) === 'validated' && cr.sellRateXaf > 0
+          );
+          const positiveSellRates = ratesToCheck.filter((cr) => cr.sellRateXaf > 0);
+          let stockReason = 'Aucune devise configurée';
+          if (ratesToCheck.length > 0) {
+            if (validatedSellRates.length > 0) {
+              const sample = validatedSellRates[0];
+              const avail = Math.max(0, sample.physicalStock - sample.reservedStock);
+              const minStock = Math.max(0, sample.minAnnounceStock || 0);
+              stockReason = `Stock disponible ${sample.code} (${formatFrNumber(avail)}) nul ou inférieur au seuil min (${formatFrNumber(minStock)})`;
+            } else if (positiveSellRates.some((cr) => getEffectiveCurrencyStatus(cr) === 'expired')) {
+              stockReason = `Tarif de vente ${positiveSellRates.map((c) => c.code).join('/')} expiré (revalidez dans Prix & Stocks)`;
+            } else if (positiveSellRates.length > 0) {
+              stockReason = `Tarif de vente ${positiveSellRates.map((c) => c.code).join('/')} en brouillon (cliquez Valider)`;
+            } else {
+              stockReason = `Tarif de vente ${pref && pref !== 'ALL' ? pref : 'devise'} non renseigné (0 FCFA dans Prix & Stocks)`;
+            }
+          }
+          const idempotencyKey = `${campaignType}_${clock.dateKey}_${r.reference}_${category}`;
+          items.push({
+            id: `${r.reference}-${category}`,
+            contactRef: r.reference,
+            contactName: r.name,
+            phone: r.phone,
+            category,
+            currencyCode: fallbackCode,
+            priceSummary: 'Stock insuffisant / Tarif non validé',
+            renderedText: renderTemplate(tplBody, {
+              nom: r.name,
+              devise: fallbackCode,
+              prix_vente: '0',
+              stock_disponible: '0',
+            }),
+            eligible: false,
+            blockReasons: [...contactBlockReasons, stockReason],
+            idempotencyKey,
+            alreadySentToday: false,
+          });
+          continue;
+        }
+
+        if (data.settings.currencyClientMode === 'grouped' && eligibleRates.length > 1) {
+          const lines = eligibleRates.map((cr) => {
+            const avail = Math.max(0, cr.physicalStock - cr.reservedStock);
+            return `• ${cr.code} : 1 ${cr.code} = ${formatFrNumber(cr.sellRateXaf)} FCFA (Dispo : ${formatFrNumber(avail)} ${cr.code})`;
+          });
+          const rendered = `CAMS GOLD\nCOURS DE VENTE DU JOUR\n\nBonjour ${r.name},\nVoici nos devises disponibles aujourd’hui :\n${lines.join('\n')}\n\nPour toute transaction, veuillez nous contacter.\nCAMS GOLD.`;
+          const groupedCurrencyCode = eligibleRates.map((x) => x.code).join(',');
+          const idempotencyKey = `${campaignType}_${clock.dateKey}_${r.reference}_${category}_GROUPED`;
+          const dedupeCheck = checkAlreadySentToday(
+            idempotencyKey,
+            r.phone,
+            category,
+            groupedCurrencyCode,
+            rendered
+          );
+          const alreadySentToday = dedupeCheck.duplicate;
+          const allReasons = [
+            ...contactBlockReasons,
+            ...(dedupeCheck.duplicate && dedupeCheck.reason ? [dedupeCheck.reason] : []),
+          ];
+
+          items.push({
+            id: `${r.reference}-${category}-GROUPED`,
+            contactRef: r.reference,
+            contactName: r.name,
+            phone: r.phone,
+            category,
+            currencyCode: eligibleRates.map((x) => x.code).join(','),
+            priceSummary: eligibleRates
+              .map((x) => `${x.code}: ${formatFrNumber(x.sellRateXaf)} F`)
+              .join(' · '),
+            renderedText: rendered,
+            eligible: allReasons.length === 0,
+            blockReasons: allReasons,
+            idempotencyKey,
+            alreadySentToday,
+          });
+        } else {
+          for (const cr of eligibleRates) {
+            const avail = Math.max(0, cr.physicalStock - cr.reservedStock);
+            const sellStr = formatFrNumber(cr.sellRateXaf);
+            const availStr = formatFrNumber(avail);
+            const rendered = renderTemplate(tplBody, {
+              nom: r.name,
+              devise: cr.code,
+              prix_vente: sellStr,
+              stock_disponible: availStr,
+            });
+            const idempotencyKey = `${campaignType}_${clock.dateKey}_${r.reference}_${category}_${cr.code}`;
+            const dedupeCheck = checkAlreadySentToday(
+              idempotencyKey,
+              r.phone,
+              category,
+              cr.code,
+              rendered
+            );
+            const alreadySentToday = dedupeCheck.duplicate;
+            const allReasons = [
+              ...contactBlockReasons,
+              ...(dedupeCheck.duplicate && dedupeCheck.reason ? [dedupeCheck.reason] : []),
+            ];
+
+            items.push({
+              id: `${r.reference}-${category}-${cr.code}`,
+              contactRef: r.reference,
+              contactName: r.name,
+              phone: r.phone,
+              category,
+              currencyCode: cr.code,
+              priceSummary: `Vente 1 ${cr.code} = ${sellStr} FCFA · Dispo ${availStr}`,
+              renderedText: rendered,
+              eligible: allReasons.length === 0,
+              blockReasons: allReasons,
+              idempotencyKey,
+              alreadySentToday,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  const eligibleCount = items.filter((i) => i.eligible).length;
+  const blockedCount = items.filter((i) => !i.eligible).length;
+
+  return {
+    localDate: clock.dateKey,
+    localTime: clock.timeLabel,
+    localWeekday: clock.weekday,
+    scheduledCategoriesToday: scheduledToday,
+    eligibleCount,
+    blockedCount,
+    items,
+  };
+};
+
+export const buildAutomationStatePayload = (
+  data: PersistedAutomationData
+): WhatsAppAutomationState => {
+  const clock = getBrazzavilleClock(data.settings.timezone);
+  const hh = String(data.settings.hour).padStart(2, '0');
+  const mm = String(data.settings.minute).padStart(2, '0');
+  const alreadyRanToday = data.lastRunDate === clock.dateKey;
+  const currentMins = clock.hour * 60 + clock.minute;
+  const targetMins = data.settings.hour * 60 + data.settings.minute;
+
+  let nextRunLabel = 'Désactivé';
+  if (data.settings.paused) {
+    nextRunLabel = 'Suspendu (en pause)';
+  } else if (data.settings.enabled) {
+    if (!alreadyRanToday && currentMins <= targetMins + 15) {
+      nextRunLabel = `Aujourd’hui à ${hh}h${mm}`;
+    } else {
+      nextRunLabel = `Demain à ${hh}h${mm}`;
+    }
+  }
+
+  const goldPricesSynced: Record<'OR_BRUT' | 'OR_FONDU' | 'BIJOUX', GoldPriceQuoteEntry> = {
+    OR_BRUT: {
+      ...data.goldPrices.OR_BRUT,
+      status: getEffectiveGoldStatus(data.goldPrices.OR_BRUT),
+    },
+    OR_FONDU: {
+      ...data.goldPrices.OR_FONDU,
+      status: getEffectiveGoldStatus(data.goldPrices.OR_FONDU),
+    },
+    BIJOUX: {
+      ...data.goldPrices.BIJOUX,
+      status: getEffectiveGoldStatus(data.goldPrices.BIJOUX),
+    },
+  };
+
+  const currencyRatesSynced = data.currencyRates.map((cr) => ({
+    ...cr,
+    availableStock: Math.max(0, cr.physicalStock - cr.reservedStock),
+    status: getEffectiveCurrencyStatus(cr),
+  }));
+
+  const pendingQueueCount = data.logs.filter(
+    (l) => l.status === 'pending' || (l.status === 'failed' && l.nextRetryAt)
+  ).length;
+
+  return {
+    ...data,
+    goldPrices: goldPricesSynced,
+    currencyRates: currencyRatesSynced,
+    localDate: clock.dateKey,
+    localTime: clock.timeLabel,
+    localWeekday: clock.weekday,
+    nextRunLabel,
+    pendingQueueCount,
+  };
+};
