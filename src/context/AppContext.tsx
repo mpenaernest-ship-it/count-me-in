@@ -1523,6 +1523,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const hasSyncedPurchasesRef = useRef(false);
   const hasSyncedStockRef = useRef(false);
   const hasSyncedSalesRef = useRef(false);
+  const hasSyncedPartnersRef = useRef(false);
+  const hasSyncedPartnershipsRef = useRef(false);
+  const hasSyncedPartnershipCashMovementsRef = useRef(false);
+  const hasSyncedLoansRef = useRef(false);
+  const partnersSnapshotRef = useRef(partners);
+  const partnershipsSnapshotRef = useRef(partnerships);
+  const partnershipCashMovementsSnapshotRef = useRef(partnershipCashMovements);
+  const loansSnapshotRef = useRef(loans);
+  partnersSnapshotRef.current = partners;
+  partnershipsSnapshotRef.current = partnerships;
+  partnershipCashMovementsSnapshotRef.current = partnershipCashMovements;
+  loansSnapshotRef.current = loans;
   const hasAutoReconciledSoldStockRef = useRef(false);
   const hasPushedUnsyncedCurrencyRef = useRef(false);
   const currencySnapshotRef = useRef({
@@ -1544,6 +1556,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       hasSyncedPurchasesRef.current = false;
       hasSyncedStockRef.current = false;
       hasSyncedSalesRef.current = false;
+      hasSyncedPartnersRef.current = false;
+      hasSyncedPartnershipsRef.current = false;
+      hasSyncedPartnershipCashMovementsRef.current = false;
+      hasSyncedLoansRef.current = false;
       hasAutoReconciledSoldStockRef.current = false;
       hasPushedUnsyncedCurrencyRef.current = false;
       return;
@@ -1602,12 +1618,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const unsubOperations = FirebaseSyncService.subscribeOperations((remoteOps, fromCache) => {
       if (fromCache) return;
       setOperations(remoteOps as LedgerEntry[]);
+      setExchanges(
+        (remoteOps as LedgerEntry[])
+          .filter((operation) => operation.title === 'Nouvel échange' && operation.subtitle)
+          .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+          .map((operation) => operation.subtitle)
+      );
     });
 
     const unsubSales = FirebaseSyncService.subscribeSaleRecords((remoteSales, fromCache) => {
       if (fromCache) return;
       hasSyncedSalesRef.current = true;
-      const validRemote = (remoteSales as Partial<SaleRecord>[]).filter(
+      const saleItems = remoteSales as (Partial<SaleRecord> & { description?: string })[];
+      setSales(
+        saleItems
+          .map((sale) => {
+            if (typeof sale.description === 'string') return sale.description;
+            if (
+              typeof sale.clientName === 'string' &&
+              typeof sale.totalGeneralWeightGrams === 'number' &&
+              typeof sale.totalPureOunces === 'number' &&
+              typeof sale.grossRevenueUsd === 'number'
+            ) {
+              return `${sale.clientName} · ${sale.totalGeneralWeightGrams.toFixed(1)} g brut (${sale.totalPureOunces.toFixed(2)} oz pur 24K) · Brut $${sale.grossRevenueUsd.toFixed(2)}`;
+            }
+            return '';
+          })
+          .filter(Boolean)
+      );
+      const validRemote = saleItems.filter(
         (item): item is SaleRecord =>
           Boolean(item && item.id && item.reference && Array.isArray(item.bars) && typeof item.grossRevenueUsd === 'number')
       );
@@ -1647,6 +1686,83 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setSalaryPayments(remotePayments);
       }
     );
+
+    const mergeLegacyRecords = <T,>(
+      remoteRecords: T[],
+      localRecords: T[],
+      getId: (record: T) => string
+    ): T[] => {
+      const merged = new Map<string, T>();
+      for (const record of localRecords) {
+        const id = getId(record);
+        if (id) merged.set(id, record);
+      }
+      for (const record of remoteRecords) {
+        const id = getId(record);
+        if (id) merged.set(id, record);
+      }
+      return Array.from(merged.values());
+    };
+
+    const unsubPartners = FirebaseSyncService.subscribePartners((remotePartners, fromCache) => {
+      if (fromCache) return;
+      const localOnly = hasSyncedPartnersRef.current
+        ? []
+        : partnersSnapshotRef.current.filter(
+            (local) => !remotePartners.some((remote) => remote.id === local.id)
+          );
+      hasSyncedPartnersRef.current = true;
+      localOnly.forEach((partner) => void FirebaseSyncService.savePartner(partner));
+      setPartners(mergeLegacyRecords(remotePartners, localOnly, (partner) => partner.id));
+    });
+
+    const unsubPartnerships = FirebaseSyncService.subscribePartnerships(
+      (remotePartnerships, fromCache) => {
+        if (fromCache) return;
+        const localOnly = hasSyncedPartnershipsRef.current
+          ? []
+          : partnershipsSnapshotRef.current.filter(
+              (local) => !remotePartnerships.some((remote) => remote.id === local.id)
+            );
+        hasSyncedPartnershipsRef.current = true;
+        localOnly.forEach((partnership) =>
+          void FirebaseSyncService.savePartnership(partnership)
+        );
+        setPartnerships(
+          mergeLegacyRecords(remotePartnerships, localOnly, (partnership) => partnership.id)
+        );
+      }
+    );
+
+    const unsubPartnershipCashMovements = FirebaseSyncService.subscribePartnershipCashMovements(
+      (remoteMovements, fromCache) => {
+        if (fromCache) return;
+        const localOnly = hasSyncedPartnershipCashMovementsRef.current
+          ? []
+          : partnershipCashMovementsSnapshotRef.current.filter(
+              (local) => !remoteMovements.some((remote) => remote.id === local.id)
+            );
+        hasSyncedPartnershipCashMovementsRef.current = true;
+        localOnly.forEach((movement) =>
+          void FirebaseSyncService.savePartnershipCashMovement(movement)
+        );
+        setPartnershipCashMovements(
+          mergeLegacyRecords(remoteMovements, localOnly, (movement) => movement.id)
+        );
+      }
+    );
+
+    const unsubLoans = FirebaseSyncService.subscribeLoans((remoteLoans, fromCache) => {
+      if (fromCache) return;
+      const localOnly = hasSyncedLoansRef.current
+        ? []
+        : loansSnapshotRef.current.filter(
+            (local) => !remoteLoans.some((remote) => remote.id === local.id)
+          );
+      hasSyncedLoansRef.current = true;
+      localOnly.forEach((loan) => void FirebaseSyncService.saveLoan(loan));
+      setLoans(mergeLegacyRecords(remoteLoans, localOnly, (loan) => loan.id));
+    });
 
     const mergeMovementLists = (
       localList: CurrencyStockMovement[],
@@ -1731,6 +1847,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       unsubTasks();
       unsubEmployees();
       unsubSalaryPayments();
+      unsubPartners();
+      unsubPartnerships();
+      unsubPartnershipCashMovements();
+      unsubLoans();
       unsubCurrency();
     };
   }, [isSignedIn]);
@@ -2401,7 +2521,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       setLoans((prev) =>
-        prev.map((l) => (matchesOld(l.partnerName) ? { ...l, partnerName: cleanName } : l))
+        prev.map((l) => {
+          if (!matchesOld(l.partnerName)) return l;
+          const updated = { ...l, partnerName: cleanName };
+          void FirebaseSyncService.saveLoan(updated);
+          return updated;
+        })
       );
     }
   };
@@ -2533,7 +2658,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       setLoans((prev) =>
-        prev.map((l) => (matchesAccount(l.partnerName) ? { ...l, partnerName: 'Partenaire archivé' } : l))
+        prev.map((l) => {
+          if (!matchesAccount(l.partnerName)) return l;
+          const updated = { ...l, partnerName: 'Partenaire archivé' };
+          void FirebaseSyncService.saveLoan(updated);
+          return updated;
+        })
       );
       return;
     }
@@ -2680,9 +2810,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setOperations((prev) => prev.filter((op) => !removedOpIds.has(op.id)));
     }
 
-    setLoans((prev) =>
-      prev.filter((l) => !matchesAccount(l.partnerName) && !(l.partnerId !== undefined && matchesAccount(String(l.partnerId))))
-    );
+    setLoans((prev) => {
+      const retained = prev.filter(
+        (loan) =>
+          !matchesAccount(loan.partnerName) &&
+          !(loan.partnerId !== undefined && matchesAccount(String(loan.partnerId)))
+      );
+      const retainedIds = new Set(retained.map((loan) => loan.id));
+      prev
+        .filter((loan) => !retainedIds.has(loan.id))
+        .forEach((loan) => void FirebaseSyncService.deleteLoan(loan.id));
+      return retained;
+    });
 
     if (balancesChanged) {
       setBankBalances(nextBalances);
@@ -4982,6 +5121,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString(),
     };
     setPartners([...partners, newPartner]);
+    void FirebaseSyncService.savePartner(newPartner);
     return newPartner;
   };
 
@@ -5011,6 +5151,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setPartners((previous) =>
       previous.map((partner) => (partner.id === partnerId ? updatedPartner : partner))
     );
+    void FirebaseSyncService.savePartner(updatedPartner);
     return updatedPartner;
   };
 
@@ -5048,6 +5189,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     setPartners((previous) => previous.filter((item) => item.id !== partnerId));
+    void FirebaseSyncService.deletePartner(partnerId);
   };
 
   const addPartnership = (partnershipData: Omit<Partnership, 'id' | 'reference' | 'createdAt'>): Partnership => {
@@ -5061,13 +5203,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString(),
     };
     setPartnerships([newPartnership, ...partnerships]);
+    void FirebaseSyncService.savePartnership(newPartnership);
     return newPartnership;
   };
 
   const updatePartnershipStatus = (id: string, status: PartnershipStatus) => {
-    setPartnerships(
-      partnerships.map((p) => (p.id === id ? { ...p, status } : p))
-    );
+    const updated = partnerships.find((partnership) => partnership.id === id);
+    if (!updated) return;
+    const next = { ...updated, status };
+    setPartnerships(partnerships.map((partnership) => partnership.id === id ? next : partnership));
+    void FirebaseSyncService.savePartnership(next);
   };
 
   const deletePartnership = (partnershipId: string) => {
@@ -5080,6 +5225,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setPartnerships((previous) =>
       previous.filter((partnership) => partnership.id !== partnershipId)
     );
+    void FirebaseSyncService.deletePartnership(partnershipId);
   };
 
   const addPartnershipCashMovement = (
@@ -5140,6 +5286,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdBy: userName,
     };
     setPartnershipCashMovements((previous) => [movement, ...previous]);
+    void FirebaseSyncService.savePartnershipCashMovement(movement);
     return movement;
   };
 
@@ -5153,6 +5300,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setPartnershipCashMovements((previous) =>
       previous.filter((movement) => movement.id !== movementId)
     );
+    void FirebaseSyncService.deletePartnershipCashMovement(movementId);
   };
 
   const addLoan = (loanData: Omit<PartnershipLoan, 'id' | 'reference' | 'createdAt' | 'repayments'>) => {
@@ -5167,6 +5315,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       repayments: [],
     };
     setLoans([newLoan, ...loans]);
+    void FirebaseSyncService.saveLoan(newLoan);
   };
 
   const deleteLoan = (loanId: string) => {
@@ -5177,6 +5326,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       throw new Error('Prêt introuvable.');
     }
     setLoans((previous) => previous.filter((loan) => loan.id !== loanId));
+    void FirebaseSyncService.deleteLoan(loanId);
   };
 
   const addLoanRepayment = (loanId: string, repaymentData: Omit<PartnershipRepayment, 'paidAt'>) => {
@@ -5194,11 +5344,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       paidAt: new Date().toISOString(),
     };
 
-    setLoans(
-      loans.map((l) =>
-        l.id === loanId ? { ...l, repayments: [...l.repayments, newRepayment] } : l
-      )
-    );
+    const updatedLoan = { ...targetLoan, repayments: [...targetLoan.repayments, newRepayment] };
+    setLoans(loans.map((loan) => loan.id === loanId ? updatedLoan : loan));
+    void FirebaseSyncService.saveLoan(updatedLoan);
   };
 
   const settleSourceAccountFromCash = ({
@@ -5849,7 +5997,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ...(goldCurChanged ? { goldCurrencyMovements: nextGoldCurMovements } : {}),
       });
     }
-    if (loansChanged) setLoans(nextLoans);
+    if (loansChanged) {
+      setLoans(nextLoans);
+      nextLoans.forEach((loan) => void FirebaseSyncService.saveLoan(loan));
+    }
 
     if (isComp) {
       // Compensation interne entre le solde cash du contact et ses factures (ne modifie pas bankBalances)

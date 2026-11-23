@@ -16,6 +16,7 @@ import {
   CurrencyStockMovement,
   Partner,
   Partnership,
+  PartnershipCashMovement,
   PartnershipLoan,
   PurchaseFormulaConfig,
   SaleRecord,
@@ -438,6 +439,146 @@ export const FirebaseSyncService = {
       if (error instanceof Error && error.message.toLowerCase().includes('permission')) {
         handleFirestoreError(error, OperationType.CREATE, path);
       }
+    }
+  },
+
+  async savePartner(partner: Partner): Promise<void> {
+    try {
+      await setDoc(doc(db, 'partners', partner.id), JSON.parse(JSON.stringify(partner)));
+    } catch (error) {
+      console.error('Firestore savePartner error:', error);
+    }
+  },
+
+  async deletePartner(partnerId: string): Promise<void> {
+    try {
+      await deleteDoc(doc(db, 'partners', partnerId));
+    } catch (error) {
+      console.error('Firestore deletePartner error:', error);
+    }
+  },
+
+  subscribePartners(onUpdate: (items: Partner[], fromCache: boolean) => void) {
+    try {
+      return onSnapshot(
+        collection(db, 'partners'),
+        { includeMetadataChanges: true },
+        (snap) => {
+          const items = snap.docs.map((d) => ({ ...(d.data() as Partner), id: d.id }));
+          onUpdate(items, snap.metadata.fromCache);
+        },
+        (error) => console.error('Firestore onSnapshot partners error:', error)
+      );
+    } catch (error) {
+      console.error('Firestore subscribePartners error:', error);
+      return () => {};
+    }
+  },
+
+  async savePartnership(partnership: Partnership): Promise<void> {
+    try {
+      await setDoc(doc(db, 'partnerships', partnership.id), JSON.parse(JSON.stringify(partnership)));
+    } catch (error) {
+      console.error('Firestore savePartnership error:', error);
+    }
+  },
+
+  async deletePartnership(partnershipId: string): Promise<void> {
+    try {
+      await deleteDoc(doc(db, 'partnerships', partnershipId));
+    } catch (error) {
+      console.error('Firestore deletePartnership error:', error);
+    }
+  },
+
+  subscribePartnerships(onUpdate: (items: Partnership[], fromCache: boolean) => void) {
+    try {
+      return onSnapshot(
+        collection(db, 'partnerships'),
+        { includeMetadataChanges: true },
+        (snap) => {
+          const items = snap.docs.map((d) => ({ ...(d.data() as Partnership), id: d.id }));
+          onUpdate(items, snap.metadata.fromCache);
+        },
+        (error) => console.error('Firestore onSnapshot partnerships error:', error)
+      );
+    } catch (error) {
+      console.error('Firestore subscribePartnerships error:', error);
+      return () => {};
+    }
+  },
+
+  async savePartnershipCashMovement(movement: PartnershipCashMovement): Promise<void> {
+    try {
+      await setDoc(
+        doc(db, 'partnership_cash_movements', movement.id),
+        JSON.parse(JSON.stringify(movement))
+      );
+    } catch (error) {
+      console.error('Firestore savePartnershipCashMovement error:', error);
+    }
+  },
+
+  async deletePartnershipCashMovement(movementId: string): Promise<void> {
+    try {
+      await deleteDoc(doc(db, 'partnership_cash_movements', movementId));
+    } catch (error) {
+      console.error('Firestore deletePartnershipCashMovement error:', error);
+    }
+  },
+
+  subscribePartnershipCashMovements(
+    onUpdate: (items: PartnershipCashMovement[], fromCache: boolean) => void
+  ) {
+    try {
+      return onSnapshot(
+        collection(db, 'partnership_cash_movements'),
+        { includeMetadataChanges: true },
+        (snap) => {
+          const items = snap.docs.map((d) => ({
+            ...(d.data() as PartnershipCashMovement),
+            id: d.id,
+          }));
+          onUpdate(items, snap.metadata.fromCache);
+        },
+        (error) => console.error('Firestore onSnapshot partnership cash movements error:', error)
+      );
+    } catch (error) {
+      console.error('Firestore subscribePartnershipCashMovements error:', error);
+      return () => {};
+    }
+  },
+
+  async saveLoan(loan: PartnershipLoan): Promise<void> {
+    try {
+      await setDoc(doc(db, 'loans', loan.id), JSON.parse(JSON.stringify(loan)));
+    } catch (error) {
+      console.error('Firestore saveLoan error:', error);
+    }
+  },
+
+  async deleteLoan(loanId: string): Promise<void> {
+    try {
+      await deleteDoc(doc(db, 'loans', loanId));
+    } catch (error) {
+      console.error('Firestore deleteLoan error:', error);
+    }
+  },
+
+  subscribeLoans(onUpdate: (items: PartnershipLoan[], fromCache: boolean) => void) {
+    try {
+      return onSnapshot(
+        collection(db, 'loans'),
+        { includeMetadataChanges: true },
+        (snap) => {
+          const items = snap.docs.map((d) => ({ ...(d.data() as PartnershipLoan), id: d.id }));
+          onUpdate(items, snap.metadata.fromCache);
+        },
+        (error) => console.error('Firestore onSnapshot loans error:', error)
+      );
+    } catch (error) {
+      console.error('Firestore subscribeLoans error:', error);
+      return () => {};
     }
   },
 

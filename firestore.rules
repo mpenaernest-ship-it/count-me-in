@@ -119,6 +119,48 @@ service cloud.firestore {
       return docId is string && docId.size() <= 128 && docId.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    match /partners/{partnerId} {
+      allow read: if hasValidProfile();
+      allow create, update: if isValidDocId(partnerId)
+        && hasRole(['ADMIN', 'CASHIER'])
+        && request.resource.data.id == partnerId
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0;
+      allow delete: if isAdmin() && isValidDocId(partnerId);
+    }
+
+    match /partnerships/{partnershipId} {
+      allow read: if hasValidProfile();
+      allow create, update: if isValidDocId(partnershipId)
+        && hasRole(['ADMIN', 'CASHIER'])
+        && request.resource.data.id == partnershipId
+        && request.resource.data.reference is string
+        && request.resource.data.status is string
+        && request.resource.data.members is list;
+      allow delete: if isAdmin() && isValidDocId(partnershipId);
+    }
+
+    match /partnership_cash_movements/{movementId} {
+      allow read: if hasValidProfile();
+      allow create, update: if isValidDocId(movementId)
+        && hasRole(['ADMIN', 'CASHIER'])
+        && request.resource.data.id == movementId
+        && request.resource.data.amountXaf is number
+        && request.resource.data.amountXaf > 0;
+      allow delete: if isAdmin() && isValidDocId(movementId);
+    }
+
+    match /loans/{loanId} {
+      allow read: if hasValidProfile();
+      allow create, update: if isValidDocId(loanId)
+        && hasRole(['ADMIN', 'CASHIER'])
+        && request.resource.data.id == loanId
+        && request.resource.data.principalXaf is number
+        && request.resource.data.principalXaf > 0
+        && request.resource.data.repayments is list;
+      allow delete: if isAdmin() && isValidDocId(loanId);
+    }
+
     match /tasks/{taskId} {
       allow read: if hasValidProfile();
       allow create, update, delete: if isAdmin();
