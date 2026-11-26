@@ -1520,6 +1520,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     salaryPayments,
   ]);
 
+  const hasSyncedOperationsRef = useRef(false);
+  const operationsSnapshotRef = useRef(operations);
+  operationsSnapshotRef.current = operations;
   const hasSyncedPurchasesRef = useRef(false);
   const hasSyncedStockRef = useRef(false);
   const hasSyncedSalesRef = useRef(false);
@@ -1553,6 +1556,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Real-time synchronization with Firebase Firestore
   useEffect(() => {
     if (!isSignedIn) {
+      hasSyncedOperationsRef.current = false;
       hasSyncedPurchasesRef.current = false;
       hasSyncedStockRef.current = false;
       hasSyncedSalesRef.current = false;
@@ -1617,9 +1621,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const unsubOperations = FirebaseSyncService.subscribeOperations((remoteOps, fromCache) => {
       if (fromCache) return;
-      setOperations(remoteOps as LedgerEntry[]);
+      const remoteOperations = remoteOps as LedgerEntry[];
+      if (!hasSyncedOperationsRef.current) {
+        hasSyncedOperationsRef.current = true;
+        const remoteIds = new Set(remoteOperations.map((operation) => operation.id));
+        const localApprosMissingRemotely = operationsSnapshotRef.current.filter(
+          (operation) => operation.isTransfer && !operation.isDeposit && !remoteIds.has(operation.id)
+        );
+        localApprosMissingRemotely.forEach((operation) => {
+          void FirebaseSyncService.saveOperation(operation);
+        });
+        setOperations([...localApprosMissingRemotely, ...remoteOperations]);
+      } else {
+        setOperations(remoteOperations);
+      }
       setExchanges(
-        (remoteOps as LedgerEntry[])
+        remoteOperations
           .filter((operation) => operation.title === 'Nouvel échange' && operation.subtitle)
           .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
           .map((operation) => operation.subtitle)
@@ -2947,7 +2964,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isTransfer: true,
       isProcessed: true,
     };
-    setOperations([newEntry, ...operations]);
+    setOperations((prev) => [newEntry, ...prev]);
+    FirebaseSyncService.saveOperation(newEntry);
   };
 
   const transferToClient = ({

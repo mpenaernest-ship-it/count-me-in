@@ -3089,7 +3089,7 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3 text-xs">
-              {canDepotRetrait && (
+              {isAdmin && canDepotRetrait && (
                 <button
                   type="button"
                   onClick={() => {
@@ -3104,7 +3104,7 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
                   <span>Solde d’ouverture</span>
                 </button>
               )}
-              {canDepotRetrait && (
+              {isAdmin && canDepotRetrait && (
                 <button
                   type="button"
                   disabled={currentCashBalance === 0 || !Number.isFinite(currentCashBalance)}
