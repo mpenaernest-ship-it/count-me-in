@@ -31,6 +31,7 @@ import {
   TrendingUp,
   TrendingDown,
   ArrowUpDown,
+  RotateCcw,
   Trash2,
   ShieldAlert,
   MessageSquare,
@@ -143,6 +144,10 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
   const [caisseOpexMode, setCaisseOpexMode] = useState<boolean>(!canDepotRetrait && canDepenses);
   const [caisseOpexCategory, setCaisseOpexCategory] = useState<string>('Dépense courante');
   const [caisseFeedback, setCaisseFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [isResetCaisseConfirmOpen, setIsResetCaisseConfirmOpen] = useState(false);
+  const [isOpeningBalanceModalOpen, setIsOpeningBalanceModalOpen] = useState(false);
+  const [openingBalanceInput, setOpeningBalanceInput] = useState('');
+  const [openingBalanceError, setOpeningBalanceError] = useState<string | null>(null);
   const [autoNotifyWhatsapp, setAutoNotifyWhatsapp] = useState<boolean>(() => getCaisseAutoWhatsappEnabled());
   const [waNotifyFeedback, setWaNotifyFeedback] = useState<CaisseWhatsAppNotifyResult | null>(null);
   const [clientTransferWaFeedback, setClientTransferWaFeedback] = useState<CaisseWhatsAppNotifyResult | null>(null);
@@ -1127,6 +1132,120 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
         setWaNotifyFeedback(result);
       }
     });
+  };
+
+  const handleResetCaisse = () => {
+    setCaisseFeedback(null);
+    if (!canDepotRetrait) {
+      setCaisseFeedback({ type: 'error', message: 'Vous n’avez pas accès aux mouvements de caisse.' });
+      return;
+    }
+
+    if (!Number.isFinite(currentCashBalance)) {
+      setCaisseFeedback({ type: 'error', message: 'Le solde de caisse n’est pas valide.' });
+      return;
+    }
+
+    if (currentCashBalance === 0) {
+      setIsResetCaisseConfirmOpen(false);
+      setCaisseFeedback({ type: 'success', message: 'Le solde de la caisse est déjà nul.' });
+      return;
+    }
+
+    const amount = Math.abs(currentCashBalance);
+    const reason = 'Remise à zéro de la caisse';
+    const date = new Date().toISOString().slice(0, 10);
+
+    try {
+      if (currentCashBalance > 0) {
+        store.withdrawCash({
+          amount,
+          beneficiaryName: 'Ajustement de caisse',
+          reason,
+          date,
+          account: cashAccountName,
+        });
+      } else {
+        store.depositCash({
+          amount,
+          depositorName: 'Ajustement de caisse',
+          reason,
+          date,
+          account: cashAccountName,
+        });
+      }
+
+      setIsResetCaisseConfirmOpen(false);
+      setCaisseFeedback({
+        type: 'success',
+        message: `La caisse a été remise à zéro. L’ajustement de ${formatMoney(amount)} FCFA est enregistré dans l’historique.`,
+      });
+      setTimeout(() => setCaisseFeedback(null), 5000);
+    } catch (err: unknown) {
+      setCaisseFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
+  const handleSetOpeningBalance = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setOpeningBalanceError(null);
+    if (!canDepotRetrait) {
+      setOpeningBalanceError('Vous n’avez pas accès aux mouvements de caisse.');
+      return;
+    }
+
+    const normalizedBalance = openingBalanceInput.replace(/\s+/g, '').replace(',', '.');
+    const targetBalance = normalizedBalance ? Number(normalizedBalance) : Number.NaN;
+    if (!Number.isFinite(targetBalance) || targetBalance < 0) {
+      setOpeningBalanceError('Saisissez un montant valide supérieur ou égal à zéro.');
+      return;
+    }
+    if (!Number.isFinite(currentCashBalance)) {
+      setOpeningBalanceError('Le solde actuel de la caisse n’est pas valide.');
+      return;
+    }
+
+    const adjustment = targetBalance - currentCashBalance;
+    if (adjustment === 0) {
+      setIsOpeningBalanceModalOpen(false);
+      setCaisseFeedback({ type: 'success', message: 'Le solde de la caisse correspond déjà au montant saisi.' });
+      return;
+    }
+
+    const reason = `Solde d’ouverture fixé à ${formatMoney(targetBalance)} FCFA`;
+    const date = new Date().toISOString().slice(0, 10);
+    try {
+      if (adjustment > 0) {
+        store.depositCash({
+          amount: adjustment,
+          depositorName: 'Solde d’ouverture',
+          reason,
+          date,
+          account: cashAccountName,
+        });
+      } else {
+        store.withdrawCash({
+          amount: Math.abs(adjustment),
+          beneficiaryName: 'Ajustement du solde d’ouverture',
+          reason,
+          date,
+          account: cashAccountName,
+        });
+      }
+
+      setIsOpeningBalanceModalOpen(false);
+      setOpeningBalanceInput('');
+      setCaisseFeedback({
+        type: 'success',
+        message: `Le solde d’ouverture de la caisse est fixé à ${formatMoney(targetBalance)} FCFA. L’ajustement est enregistré dans l’historique.`,
+      });
+      setTimeout(() => setCaisseFeedback(null), 5000);
+    } catch (err: unknown) {
+      setOpeningBalanceError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   // Exécuter un Dépôt au compte sélectionné (encaissement créance, ou règlement d'achat d'or si sélectionné explicitement)
@@ -2970,6 +3089,33 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3 text-xs">
+              {canDepotRetrait && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpeningBalanceInput('');
+                    setOpeningBalanceError(null);
+                    setIsOpeningBalanceModalOpen(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-amber-200 bg-amber-50 text-[11px] font-bold text-amber-900 transition-colors hover:bg-amber-100"
+                  title="Définir le montant de départ de la caisse"
+                >
+                  <Wallet size={13} />
+                  <span>Solde d’ouverture</span>
+                </button>
+              )}
+              {canDepotRetrait && (
+                <button
+                  type="button"
+                  disabled={currentCashBalance === 0 || !Number.isFinite(currentCashBalance)}
+                  onClick={() => setIsResetCaisseConfirmOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-red-200 bg-red-50 text-[11px] font-bold text-red-800 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  title="Enregistrer un ajustement pour mettre le solde de la caisse à zéro"
+                >
+                  <RotateCcw size={13} />
+                  <span>Remettre la caisse à zéro</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -6038,6 +6184,90 @@ export const CashScreen: React.FC<CashScreenProps> = ({ initialTab = 'achat' }) 
           }
         />
       )}
+
+      <Modal
+        isOpen={isResetCaisseConfirmOpen}
+        onClose={() => setIsResetCaisseConfirmOpen(false)}
+        title="Remettre la caisse à zéro ?"
+        maxWidth="max-w-md"
+      >
+        <div className="space-y-4">
+          <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+            Le solde actuel de la caisse est de{' '}
+            <strong>{formatMoney(currentCashBalance)} FCFA</strong>. Un mouvement d’ajustement sera enregistré
+            pour ramener le solde à zéro. L’historique existant ne sera pas supprimé.
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setIsResetCaisseConfirmOpen(false)}
+              className="rounded-xl border border-gray-300 px-4 py-2 text-xs font-bold text-gray-600 hover:bg-gray-100"
+            >
+              Annuler
+            </button>
+            <button
+              type="button"
+              onClick={handleResetCaisse}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-red-700 px-4 py-2 text-xs font-bold text-white hover:bg-red-800"
+            >
+              <RotateCcw size={14} />
+              Confirmer la remise à zéro
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={isOpeningBalanceModalOpen}
+        onClose={() => setIsOpeningBalanceModalOpen(false)}
+        title="Définir le solde d’ouverture"
+        maxWidth="max-w-md"
+      >
+        <form onSubmit={handleSetOpeningBalance} className="space-y-4">
+          <p className="text-sm text-[#58615A]">
+            Indiquez le solde souhaité pour la caisse. Un mouvement d’ajustement correspondant sera ajouté à
+            l’historique, sans supprimer les opérations existantes.
+          </p>
+          <div className="rounded-xl border border-[#E8D8BE] bg-[#FAF8F3] p-3 text-xs">
+            Solde actuel : <strong>{formatMoney(currentCashBalance)} FCFA</strong>
+          </div>
+          <div>
+            <label htmlFor="caisse-opening-balance" className="mb-1.5 block text-xs font-bold text-[#192A24]">
+              Nouveau solde d’ouverture (FCFA)
+            </label>
+            <input
+              id="caisse-opening-balance"
+              type="text"
+              inputMode="decimal"
+              value={openingBalanceInput}
+              onChange={(event) => setOpeningBalanceInput(event.target.value)}
+              placeholder="0"
+              className="w-full rounded-xl border border-[#E8D8BE] bg-[#FAF8F3] px-3.5 py-2.5 font-mono text-base font-bold tabular-nums text-[#192A24] focus:outline-none focus:ring-2 focus:ring-[#D39725]/40"
+              autoFocus
+            />
+          </div>
+          {openingBalanceError && (
+            <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">
+              {openingBalanceError}
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setIsOpeningBalanceModalOpen(false)}
+              className="rounded-xl border border-gray-300 px-4 py-2 text-xs font-bold text-gray-600 hover:bg-gray-100"
+            >
+              Annuler
+            </button>
+            <button
+              type="submit"
+              className="rounded-xl bg-[#192A24] px-4 py-2 text-xs font-bold text-white hover:bg-[#253D34]"
+            >
+              Enregistrer le solde
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       {/* Receipt Modal for Client Transfers */}
       {receiptEntry && (
